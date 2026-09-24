@@ -1,10 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, authorizeRoles } = require('../auth/auth.middleware'); // Destructure the function properly
-const { generatePass, getMyPasses, scanPass } = require('./pass.controller');
+const { generatePass } = require('./pass.controller');
+const { requireAuth, authorizeRoles } = require('../auth/auth.middleware');
 
-router.post('/', requireAuth, generatePass);
-router.get('/my-passes', requireAuth, getMyPasses);
-router.post('/scan', requireAuth, authorizeRoles('Organizer', 'Admin'), scanPass);
+// Route requires a valid JWT. Attendees and Organizers can generate passes.
+router.post('/generate', requireAuth, authorizeRoles('Attendee', 'Organizer'), generatePass);
 
 module.exports = router;
