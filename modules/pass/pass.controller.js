@@ -38,4 +38,44 @@ const generatePass = async (req, res) => {
     }
 };
 
-module.exports = { generatePass };
+// Get all passes for the logged-in user
+const getMyPasses = async (req, res) => {
+    try {
+        // Find passes belonging to this user and pull in the event details (title, date, location)
+        const passes = await Pass.find({ attendeeId: req.user._id })
+            .populate('eventId', 'title date location');
+
+        res.status(200).json(passes);
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Organizer scans a pass at the door
+const scanPass = async (req, res) => {
+    try {
+        const { passId } = req.params;
+
+        const pass = await Pass.findById(passId);
+        if (!pass) return res.status(404).json({ message: 'Pass not found' });
+
+        // Security checks
+        if (pass.status === 'Scanned') {
+            return res.status(400).json({ message: 'Pass has already been scanned!' });
+        }
+        if (pass.status === 'Revoked') {
+            return res.status(400).json({ message: 'This pass is no longer valid.' });
+        }
+
+        // Update status to prevent reuse
+        pass.status = 'Scanned';
+        await pass.save();
+
+        res.status(200).json({ message: 'Pass scanned successfully!', pass });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// Don't forget to export the new functions at the bottom!
+module.exports = { generatePass, getMyPasses, scanPass };
