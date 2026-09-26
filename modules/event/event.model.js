@@ -1,66 +1,43 @@
 const mongoose = require('mongoose');
 
-// Base Event Schema
-const eventSchema = new mongoose.Schema(
-    {
-        title: String,
-        description: String,
-        date: Date,
-        organizerId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User',
-        },
-    },
-    {
-        discriminatorKey: 'eventType',
-        collection: 'events',
-        timestamps: true,
-    }
-);
+// 1. Define Base Options
+const baseOptions = {
+    discriminatorKey: 'eventType',
+    collection: 'events',
+    timestamps: true
+};
+
+// 2. Base Event Schema (Common fields)
+const eventSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    description: { type: String },
+    date: { type: Date, required: true },
+    location: { type: String, required: true },
+    category: { type: String, required: true },
+    maxCapacity: { type: Number, required: true },
+    organizerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+}, baseOptions);
 
 const Event = mongoose.model('Event', eventSchema);
 
-// PublicEvent Discriminator
-const PublicEvent = Event.discriminator(
-    'PublicEvent',
-    new mongoose.Schema({
-        ticketPrice: Number,
-        maxCapacity: {
-            type: Number,
-            required: true,
-        },
-    })
-);
+// 3. Volunteer Event Schema
+const VolunteerEvent = Event.discriminator('Volunteer', new mongoose.Schema({
+    requiredHours: { type: Number, required: true },
+    skillsNeeded: [{ type: String }]
+}));
 
-// CorporateEvent Discriminator
-const CorporateEvent = Event.discriminator(
-    'CorporateEvent',
-    new mongoose.Schema({
-        companyName: {
-            type: String,
-            required: true,
-        },
-        isPrivate: {
-            type: Boolean,
-            default: true,
-        },
-    })
-);
+// 4. Corporate Event Schema
+const CorporateEvent = Event.discriminator('Corporate', new mongoose.Schema({
+    companyName: { type: String, required: true },
+    sponsors: [{ type: String }],
+    dressCode: { type: String, enum: ['Casual', 'Business Casual', 'Formal'], default: 'Business Casual' }
+}));
 
-// PilgrimEvent Discriminator
-const PilgrimEvent = Event.discriminator(
-    'PilgrimEvent',
-    new mongoose.Schema({
-        inventory: {
-            bedsAvailable: Number,
-            mealsAvailable: Number,
-        },
-    })
-);
+// 5. Pilgrim Event Schema
+const PilgrimEvent = Event.discriminator('Pilgrim', new mongoose.Schema({
+    pilgrimageSite: { type: String, required: true },
+    accommodationProvided: { type: Boolean, default: false },
+    guideName: { type: String }
+}));
 
-module.exports = {
-    Event,
-    PublicEvent,
-    CorporateEvent,
-    PilgrimEvent,
-};
+module.exports = { Event, VolunteerEvent, CorporateEvent, PilgrimEvent };
