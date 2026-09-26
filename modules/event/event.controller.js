@@ -1,6 +1,5 @@
 const { Event } = require('./event.model');
 
-// CHANGED: Declared as a constant so the bottom export works
 const createEvent = async (req, res) => {
     try {
         const newEvent = new Event({
@@ -48,4 +47,72 @@ const getEvents = async (req, res) => {
     }
 };
 
-module.exports = { createEvent, getEvents };
+const getEventById = async (req, res) => {
+    try {
+        const eventId = req.params.id;
+
+        const event = await Event.findById(eventId).populate('organizerId', 'name email');
+
+        if (!event) {
+            return res.status(404).json({ message: 'Event not found' });
+        }
+
+        res.status(200).json(event);
+    } catch (error) {
+        if (error.name === 'CastError') {
+            return res.status(400).json({ message: 'Invalid Event ID format' });
+        }
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// NEW: Update Event
+const updateEvent = async (req, res) => {
+    try {
+        const eventId = req.params.id;
+
+        const event = await Event.findById(eventId);
+        if (!event) {
+            return res.status(404).json({ message: 'Event not found' });
+        }
+
+        if (event.organizerId.toString() !== req.user._id) {
+            return res.status(403).json({ message: 'Not authorized to edit this event' });
+        }
+
+        const updatedEvent = await Event.findByIdAndUpdate(
+            eventId,
+            { $set: req.body },
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json(updatedEvent);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+// NEW: Delete Event
+const deleteEvent = async (req, res) => {
+    try {
+        const eventId = req.params.id;
+
+        const event = await Event.findById(eventId);
+        if (!event) {
+            return res.status(404).json({ message: 'Event not found' });
+        }
+
+        if (event.organizerId.toString() !== req.user._id) {
+            return res.status(403).json({ message: 'Not authorized to delete this event' });
+        }
+
+        await Event.findByIdAndDelete(eventId);
+
+        res.status(200).json({ message: 'Event successfully deleted' });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};
+
+// EXPORT ALL 5 FUNCTIONS
+module.exports = { createEvent, getEvents, getEventById, updateEvent, deleteEvent };

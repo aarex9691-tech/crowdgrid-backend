@@ -1,10 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { createEvent, getEvents } = require('./event.controller');
+const { createEvent, getEvents, getEventById, updateEvent, deleteEvent } = require('./event.controller');
 const { requireAuth, authorizeRoles } = require('../auth/auth.middleware');
 
-// The Routes
-router.post('/', requireAuth, authorizeRoles('Organizer', 'Admin'), createEvent);
 router.get('/', getEvents);
+router.get('/:id', getEventById);
+router.post('/', requireAuth, authorizeRoles('Organizer'), createEvent);
+
+// Make sure these two lines are here!
+router.put('/:id', requireAuth, authorizeRoles('Organizer'), updateEvent);
+router.delete('/:id', requireAuth, authorizeRoles('Organizer'), deleteEvent);
 
 module.exports = router;
