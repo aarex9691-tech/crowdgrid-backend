@@ -4,6 +4,7 @@ const connectDB = require('./config/db');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const passRoutes = require('./modules/pass/pass.routes');
 // const mongoSanitize = require('express-mongo-sanitize'); // Temporarily disabled
 
 // Load environment variables
@@ -37,8 +38,7 @@ app.get('/health', (req, res) => res.send('Server is running'));
 // Active Routes
 app.use('/api/auth', require('./modules/auth/auth.routes'));
 app.use('/api/events', require('./modules/event/event.routes'));
-app.use('/api/pass', require('./modules/pass/pass.routes'));
-
+app.use('/api/passes', passRoutes);
 // Upcoming Routes (Commented out until we build Phase 6)
 // app.use('/api/volunteer', require('./modules/volunteer/volunteer.routes'));
 // app.use('/api/corporate', require('./modules/corporate/corporate.routes'));
