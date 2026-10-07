@@ -66,7 +66,6 @@ const getEventById = async (req, res) => {
     }
 };
 
-// NEW: Update Event
 const updateEvent = async (req, res) => {
     try {
         const eventId = req.params.id;
@@ -76,7 +75,7 @@ const updateEvent = async (req, res) => {
             return res.status(404).json({ message: 'Event not found' });
         }
 
-        if (event.organizerId.toString() !== req.user._id) {
+        if (event.organizerId.toString() !== req.user._id.toString()) {
             return res.status(403).json({ message: 'Not authorized to edit this event' });
         }
 
@@ -92,7 +91,6 @@ const updateEvent = async (req, res) => {
     }
 };
 
-// NEW: Delete Event
 const deleteEvent = async (req, res) => {
     try {
         const eventId = req.params.id;
@@ -102,7 +100,7 @@ const deleteEvent = async (req, res) => {
             return res.status(404).json({ message: 'Event not found' });
         }
 
-        if (event.organizerId.toString() !== req.user._id) {
+        if (event.organizerId.toString() !== req.user._id.toString()) {
             return res.status(403).json({ message: 'Not authorized to delete this event' });
         }
 
@@ -114,5 +112,40 @@ const deleteEvent = async (req, res) => {
     }
 };
 
-// EXPORT ALL 5 FUNCTIONS
-module.exports = { createEvent, getEvents, getEventById, updateEvent, deleteEvent };
+const rsvpEvent = async (req, res) => {
+    try {
+        const eventId = req.params.id;
+        const userId = req.user._id || req.user.id;
+
+        const event = await Event.findById(eventId);
+        if (!event) {
+            return res.status(404).json({ message: 'Event not found' });
+        }
+
+        if (!event.attendees) {
+            event.attendees = [];
+        }
+
+        if (event.attendees.includes(userId)) {
+            return res.status(400).json({ message: 'You have already RSVP\'d to this event.' });
+        }
+
+        event.attendees.push(userId);
+        await event.save();
+
+        res.status(200).json({ message: 'Successfully RSVP\'d for event!', event });
+    } catch (err) {
+        console.error('RSVP Error:', err);
+        res.status(500).json({ message: 'Server error during RSVP' });
+    }
+};
+
+// Export ALL 6 functions cleanly
+module.exports = {
+    createEvent,
+    getEvents,
+    getEventById,
+    updateEvent,
+    deleteEvent,
+    rsvpEvent
+};
