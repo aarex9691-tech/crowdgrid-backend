@@ -5,7 +5,6 @@ const Provider = require('../provider/provider.model');
 const { Lodging } = require('../lodging/lodging.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
-const { withTransaction } = require('../../utils/tx');
 const { hasPermission, ROLES } = require('../../config/roles');
 const { badRequest, forbidden, notFound, conflict } = require('../../utils/httpError');
 
@@ -133,36 +132,34 @@ const rsvp = async (eventId, user) => {
     const dedupeKey = `PUBLIC:${event._id}:${user._id}`;
     if (await Pass.exists({ dedupeKey })) throw conflict("You have already RSVP'd to this event");
 
-    return withTransaction(async (session) => {
-        const claimed = await Event.findOneAndUpdate(
-            { _id: event._id, $expr: { $lt: ['$attendeesCount', '$capacity'] } },
-            { $inc: { attendeesCount: 1 } },
-            { returnDocument: 'after', session }
+    // Claim a seat atomically, outside any transaction
+    const claimed = await Event.findOneAndUpdate(
+        { _id: event._id, $expr: { $lt: ['$attendeesCount', '$capacity'] } },
+        { $inc: { attendeesCount: 1 } },
+        { returnDocument: 'after' }
+    );
+    if (!claimed) throw conflict('Sorry, this event is full');
+    try {
+        const pass = await issuePass(
+            {
+                type: 'PUBLIC',
+                userId: user._id,
+                eventId: event._id,
+                refId: event._id,
+                title: event.title,
+                subtitle: `${event.venue || event.city} - Entry pass`,
+                details: { venue: event.venue, city: event.city, startsAt: event.startDate },
+                validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
+                validUntil: event.endDate,
+                dedupeKey,
+            }
         );
-        if (!claimed) throw conflict('Sorry, this event is full');
-        try {
-            const pass = await issuePass(
-                {
-                    type: 'PUBLIC',
-                    userId: user._id,
-                    eventId: event._id,
-                    refId: event._id,
-                    title: event.title,
-                    subtitle: `${event.venue || event.city} - Entry pass`,
-                    details: { venue: event.venue, city: event.city, startsAt: event.startDate },
-                    validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
-                    validUntil: event.endDate,
-                    dedupeKey,
-                },
-                session
-            );
-            return { message: "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
-        } catch (err) {
-            if (!session) await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -1 } });
-            if (err.code === 11000) throw conflict("You have already RSVP'd to this event");
-            throw err;
-        }
-    });
+        return { message: "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
+    } catch (err) {
+        await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -1 } });
+        if (err.code === 11000) throw conflict("You have already RSVP'd to this event");
+        throw err;
+    }
 };
 
 const checkCode = async (eventId, code) => {

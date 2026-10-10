@@ -81,7 +81,9 @@ Lodging.findOneAndUpdate(
 )
 ```
 
-MongoDB applies each single-document update atomically, so concurrent requests cannot both see the last bed. Losing requests match nothing and get "Sold out". The booking and QR pass are written in the same multi-document transaction on Atlas. This is the MongoDB equivalent of the spec's MySQL `SELECT … FOR UPDATE` and `UPDATE`.
+MongoDB applies each single-document update atomically, so concurrent requests cannot both see the last bed. Losing requests match nothing and get "Sold out". This is the MongoDB equivalent of the spec's MySQL `SELECT … FOR UPDATE` and `UPDATE`.
+
+The claim deliberately runs outside a transaction: wrapping it in one made 200 simultaneous requests collide and retry (about 67 s in testing). Afterwards, the booking and QR pass are written together in a transaction, and if that step fails the beds are handed back (a compensating update).
 
 **One meal token per person per meal.** Each pass has a `dedupeKey` such as `MEAL:<event>:<date>:LUNCH:<user>` with a unique index. The database itself rejects the second token, even if two requests arrive together.
 

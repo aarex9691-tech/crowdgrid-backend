@@ -46,8 +46,12 @@ const parseStay = (event, checkIn, checkOut) => {
  * match and the rest find nothing - no oversell, no locks held by the app.
  * (MySQL equivalent: SELECT ... FOR UPDATE then UPDATE inside a transaction.)
  *
- * The decrement, booking and QR pass are written in one transaction on Atlas;
- * on a standalone server a failure after the decrement gives the beds back.
+ * The claim runs on its own, outside any transaction: a single-document update
+ * is already atomic, and keeping it out of a multi-document transaction means
+ * hundreds of simultaneous requests never trigger transaction write-conflict
+ * retries (200 racing requests finish in about a second instead of a minute).
+ * The booking and its QR pass are then written together in one transaction
+ * (Atlas). If that step fails for any reason, the beds are handed back.
  */
 const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut } = {}) => {
     const count = Number(beds);
@@ -75,19 +79,21 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
         throw badRequest(`Limit is ${MAX_BEDS_PER_USER} beds per person for this yatra. You already hold ${already}.`);
     }
 
-    return withTransaction(async (session) => {
-        const updated = await Lodging.findOneAndUpdate(
-            { _id: lodging._id, isActive: true, availableBeds: { $gte: count } },
-            { $inc: { availableBeds: -count } },
-            { returnDocument: 'after', session }
-        );
-        if (!updated) {
-            const fresh = await Lodging.findById(lodging._id, 'availableBeds').session(session).lean();
-            const left = fresh ? fresh.availableBeds : 0;
-            throw conflict(left === 0 ? 'Sold out - no beds left at this camp' : `Only ${left} bed(s) left`, { availableBeds: left });
-        }
+    // 1. Claim the beds atomically (no transaction, no conflict retries)
+    const updated = await Lodging.findOneAndUpdate(
+        { _id: lodging._id, isActive: true, availableBeds: { $gte: count } },
+        { $inc: { availableBeds: -count } },
+        { returnDocument: 'after' }
+    );
+    if (!updated) {
+        const fresh = await Lodging.findById(lodging._id, 'availableBeds').lean();
+        const left = fresh ? fresh.availableBeds : 0;
+        throw conflict(left === 0 ? 'Sold out - no beds left at this camp' : `Only ${left} bed(s) left`, { availableBeds: left });
+    }
 
-        try {
+    // 2. Write booking + pass together; give the beds back if this fails
+    try {
+        return await withTransaction(async (session) => {
             const [booking] = await LodgingBooking.create(
                 [{ lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, ...stay }],
                 { session }
@@ -122,12 +128,11 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
                 availableBeds: updated.availableBeds,
                 pass: toClient(pass),
             };
-        } catch (err) {
-            // Standalone MongoDB (no transactions): give the beds back
-            if (!session) await Lodging.updateOne({ _id: lodging._id }, { $inc: { availableBeds: count } });
-            throw err;
-        }
-    });
+        });
+    } catch (err) {
+        await Lodging.updateOne({ _id: lodging._id }, { $inc: { availableBeds: count } });
+        throw err;
+    }
 };
 
 /** Cancel a booking: flips status atomically, returns the beds, voids the pass. */

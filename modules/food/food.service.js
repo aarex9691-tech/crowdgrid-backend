@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 const { FoodCenter, FoodSlot, MEALS } = require('./food.model');
 const Provider = require('../provider/provider.model');
+const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
-const { withTransaction } = require('../../utils/tx');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
 
@@ -56,39 +56,42 @@ const claim = async (slotId, user) => {
 
     const dedupeKey = `MEAL:${slot.eventId}:${slot.date}:${slot.meal}:${user._id}`;
 
-    return withTransaction(async (session) => {
-        const updated = await FoodSlot.findOneAndUpdate(
-            { _id: slot._id, remaining: { $gt: 0 } },
-            { $inc: { remaining: -1 } },
-            { returnDocument: 'after', session }
-        );
-        if (!updated) throw conflict('All tokens for this meal are taken. Try another kitchen.', { remaining: 0 });
-        try {
-            const pass = await issuePass(
-                {
-                    type: 'MEAL',
-                    userId: user._id,
-                    eventId: slot.eventId,
-                    providerId: center.providerId,
-                    refId: slot._id,
-                    title: `${MEALS[slot.meal].label} - ${center.name}`,
-                    subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}`,
-                    details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu: center.menu },
-                    validFrom: from,
-                    validUntil: until,
-                    dedupeKey,
-                },
-                session
-            );
-            return { message: 'Meal token issued', remaining: updated.remaining, pass: toClient(pass) };
-        } catch (err) {
-            if (!session) await FoodSlot.updateOne({ _id: slot._id }, { $inc: { remaining: 1 } });
-            if (err.code === 11000) {
-                throw conflict(`You already have a ${MEALS[slot.meal].label.toLowerCase()} token for ${slot.date} (limit 1 per meal)`);
+    // Fast path: already holding this meal's token (the unique index still guards races)
+    if (await Pass.exists({ dedupeKey })) {
+        throw conflict(`You already have a ${MEALS[slot.meal].label.toLowerCase()} token for ${slot.date} (limit 1 per meal)`);
+    }
+
+    // Claim one token from the quota atomically, outside any transaction
+    const updated = await FoodSlot.findOneAndUpdate(
+        { _id: slot._id, remaining: { $gt: 0 } },
+        { $inc: { remaining: -1 } },
+        { returnDocument: 'after' }
+    );
+    if (!updated) throw conflict('All tokens for this meal are taken. Try another kitchen.', { remaining: 0 });
+    try {
+        const pass = await issuePass(
+            {
+                type: 'MEAL',
+                userId: user._id,
+                eventId: slot.eventId,
+                providerId: center.providerId,
+                refId: slot._id,
+                title: `${MEALS[slot.meal].label} - ${center.name}`,
+                subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}`,
+                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu: center.menu },
+                validFrom: from,
+                validUntil: until,
+                dedupeKey,
             }
-            throw err;
+        );
+        return { message: 'Meal token issued', remaining: updated.remaining, pass: toClient(pass) };
+    } catch (err) {
+        await FoodSlot.updateOne({ _id: slot._id }, { $inc: { remaining: 1 } });
+        if (err.code === 11000) {
+            throw conflict(`You already have a ${MEALS[slot.meal].label.toLowerCase()} token for ${slot.date} (limit 1 per meal)`);
         }
-    });
+        throw err;
+    }
 };
 
 module.exports = { listCenters, claim };
