@@ -1,43 +1,56 @@
 const mongoose = require('mongoose');
 
-// 1. Define Base Options
-const baseOptions = {
-    discriminatorKey: 'eventType',
-    collection: 'events',
-    timestamps: true
-};
+/**
+ * One collection for the three event families shown in the app:
+ *   YATRA     - mega pilgrimage hubs (Kumbh Mela, Pandharpur Wari) with services underneath
+ *   PUBLIC    - simple public events with one-tap RSVP and an entry pass
+ *   CORPORATE - invitation-only events unlocked with an access code
+ */
+const sessionSchema = new mongoose.Schema(
+    {
+        code: { type: String, required: true },
+        title: { type: String, required: true },
+        kind: { type: String, enum: ['SESSION', 'MEAL'], default: 'SESSION' },
+        time: String,
+    },
+    { _id: false }
+);
 
-// 2. Base Event Schema (Common fields)
-const eventSchema = new mongoose.Schema({
-    title: { type: String, required: true },
-    description: { type: String },
-    date: { type: Date, required: true },
-    location: { type: String, required: true },
-    category: { type: String, required: true },
-    maxCapacity: { type: Number, required: true },
-    organizerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
-}, baseOptions);
+const eventSchema = new mongoose.Schema(
+    {
+        title: { type: String, required: true, trim: true },
+        slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
+        kind: { type: String, enum: ['YATRA', 'PUBLIC', 'CORPORATE'], required: true },
+        tagline: String,
+        description: String,
+        city: { type: String, required: true },
+        state: String,
+        venue: String,
+        startDate: { type: Date, required: true },
+        endDate: { type: Date, required: true },
+        coverImage: String,
 
-const Event = mongoose.model('Event', eventSchema);
+        // YATRA
+        isFlagship: { type: Boolean, default: false },
+        expectedFootfall: Number,
+        keyDates: [{ _id: false, label: String, date: Date }],
+        sectors: [String],
 
-// 3. Volunteer Event Schema
-const VolunteerEvent = Event.discriminator('Volunteer', new mongoose.Schema({
-    requiredHours: { type: Number, required: true },
-    skillsNeeded: [{ type: String }]
-}));
+        // PUBLIC (headcount is updated atomically on RSVP)
+        capacity: { type: Number, min: 0 },
+        attendeesCount: { type: Number, default: 0, min: 0 },
 
-// 4. Corporate Event Schema
-const CorporateEvent = Event.discriminator('Corporate', new mongoose.Schema({
-    companyName: { type: String, required: true },
-    sponsors: [{ type: String }],
-    dressCode: { type: String, enum: ['Casual', 'Business Casual', 'Formal'], default: 'Business Casual' }
-}));
+        // CORPORATE
+        companyName: String,
+        accessCode: { type: String, select: false },
+        sessions: [sessionSchema],
 
-// 5. Pilgrim Event Schema
-const PilgrimEvent = Event.discriminator('Pilgrim', new mongoose.Schema({
-    pilgrimageSite: { type: String, required: true },
-    accommodationProvided: { type: Boolean, default: false },
-    guideName: { type: String }
-}));
+        organizerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        status: { type: String, enum: ['ACTIVE', 'ARCHIVED'], default: 'ACTIVE' },
+    },
+    { timestamps: true }
+);
 
-module.exports = { Event, VolunteerEvent, CorporateEvent, PilgrimEvent };
+eventSchema.index({ kind: 1, startDate: 1 });
+
+module.exports = mongoose.model('Event', eventSchema);

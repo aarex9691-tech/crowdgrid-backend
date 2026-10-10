@@ -1,15 +1,18 @@
 const express = require('express');
+const passes = require('./pass.service');
+const { requireAuth, requirePermission } = require('../../middleware/auth');
+
 const router = express.Router();
-const { generatePass, getUserPasses, verifyPass } = require('./pass.controller');
-const { requireAuth, authorizeRoles } = require('../auth/auth.middleware');
 
-// GET: Retrieve all passes for the logged-in Attendee
-router.get('/my-passes', requireAuth, authorizeRoles('Attendee'), getUserPasses);
+// My Yatra Passbook: every pass the user holds, each with its signed QR payload
+router.get('/mine', requireAuth, async (req, res) => {
+    res.json(await passes.listMine(req.user._id));
+});
 
-// POST: Register for a specific event
-router.post('/:eventId/register', requireAuth, authorizeRoles('Attendee'), generatePass);
-
-// PATCH: Organizer scans and verifies a pass
-router.patch('/:passId/verify', requireAuth, authorizeRoles('Organizer'), verifyPass);
+// Ground staff QR scanner
+router.post('/scan', requireAuth, requirePermission('pass:scan'), async (req, res) => {
+    const qr = passes.requireQr(req.body && req.body.qr);
+    res.json(await passes.scan(qr, req.user));
+});
 
 module.exports = router;
