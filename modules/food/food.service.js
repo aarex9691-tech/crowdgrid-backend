@@ -30,6 +30,9 @@ const listCenters = async (eventId, { sector, date } = {}) => {
     };
 };
 
+const humanDate = (d) =>
+    istDateTime(d, '12:00').toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short' });
+
 const windowFor = (slot) => {
     if (process.env.PASS_TIME_WINDOWS === 'relaxed') {
         return { from: istDateTime(slot.date, '00:00'), until: istDateTime(slot.date, '23:59') };
@@ -69,7 +72,7 @@ const claim = async (slotId, user) => {
                     providerId: center.providerId,
                     refId: slot._id,
                     title: `${MEALS[slot.meal].label} - ${center.name}`,
-                    subtitle: `${slot.date} - ${slot.startTime} to ${slot.endTime}`,
+                    subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}`,
                     details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu: center.menu },
                     validFrom: from,
                     validUntil: until,

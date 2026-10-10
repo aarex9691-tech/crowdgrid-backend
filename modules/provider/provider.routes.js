@@ -8,6 +8,10 @@ router.post('/apply', requireAuth, requirePermission('provider:apply'), async (r
     res.status(201).json(await providers.apply(req.user, req.body || {}));
 });
 
+router.get('/verified', async (req, res) => {
+    res.json(await providers.listVerified(String(req.query.eventId || '')));
+});
+
 router.get('/mine', requireAuth, async (req, res) => {
     res.json(await providers.mine(req.user._id));
 });

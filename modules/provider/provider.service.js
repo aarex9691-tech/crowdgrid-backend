@@ -71,4 +71,10 @@ const decide = async (providerId, reviewer, { decision, reason } = {}) => {
     });
 };
 
-module.exports = { apply, mine, list, decide };
+/** Verified organisations for an event (public: used by the seva form). */
+const listVerified = async (eventId) => {
+    if (!mongoose.isValidObjectId(eventId)) throw badRequest('Invalid event id');
+    return Provider.find({ eventId, verificationStatus: 'VERIFIED' }, 'name type description').sort({ name: 1 }).lean();
+};
+
+module.exports = { apply, mine, list, listVerified, decide };
