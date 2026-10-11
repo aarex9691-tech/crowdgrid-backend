@@ -17,6 +17,10 @@ const codeAttempts = rateLimit({
 });
 
 // Corporate Admin dashboard (declared before /:id so "corporate" is not read as an id)
+router.post('/corporate/redeem', requireAuth, codeAttempts, async (req, res) => {
+    res.json(await events.findByAccessCode(req.body && req.body.code));
+});
+
 router.get('/corporate/mine', requireAuth, async (req, res) => {
     res.json(await events.myCorporateEvents(req.user));
 });
