@@ -16,6 +16,11 @@ const codeAttempts = rateLimit({
     message: { message: 'Too many wrong access codes. Please wait 15 minutes and try again.' },
 });
 
+// Corporate Admin dashboard (declared before /:id so "corporate" is not read as an id)
+router.get('/corporate/mine', requireAuth, async (req, res) => {
+    res.json(await events.myCorporateEvents(req.user));
+});
+
 router.get('/', async (req, res) => {
     res.json(await events.list({ kind: req.query.kind && String(req.query.kind) }));
 });
@@ -55,6 +60,10 @@ router.get('/:id/corporate/code', requireAuth, async (req, res) => {
 
 router.post('/:id/corporate/code', requireAuth, async (req, res) => {
     res.json(await events.regenerateCorporateCode(req.params.id, req.user));
+});
+
+router.get('/:id/corporate/attendees', requireAuth, async (req, res) => {
+    res.json(await events.corporateAttendees(req.params.id, req.user));
 });
 
 module.exports = router;

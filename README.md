@@ -27,7 +27,7 @@ Every account's password is `Crowd@123`.
 | 9000000003 | NGO / Seva Admin (Shri Ram Seva Trust) | Camp & kitchen manager, approve volunteer |
 | 9000000002 | District Authority | Control room: occupancy, SOS, verify NGO |
 | 9000000001 | Super Admin | Everything |
-| 9000000004 | Corporate Admin | Scanner (corporate desk) |
+| 9000000004 | Corporate Admin | My corporate events: create event, access code, invitations (WhatsApp / email / QR card), attendee list |
 | 9000000007 | Pilgrim with a pending seva application | Approval flow |
 | 9000000009 | Pilgrim with a pending NGO application | Verification flow |
 
@@ -110,6 +110,9 @@ The claim deliberately runs outside a transaction: wrapping it in one made 200 s
 | `GET /api/events`, `GET /api/events/:idOrSlug` | public |
 | `POST /api/events/:id/rsvp` | booking roles |
 | `POST /api/events/:id/corporate/verify` → `/badge` | logged in |
+| `GET /api/events/corporate/mine` | Corporate Admin (own events), Super Admin (all): events with access code and badge counts |
+| `GET /api/events/:id/corporate/code`, `POST /api/events/:id/corporate/code` (regenerate) | organiser, Super Admin |
+| `GET /api/events/:id/corporate/attendees` | organiser, Super Admin: badge holders, sessions, check-in status |
 | `GET /api/lodgings?eventId&sector&category` | public |
 | `POST /api/lodgings/:id/book`, `POST /api/lodgings/bookings/:id/cancel` | booking roles / owner |
 | `GET /api/food?eventId&date`, `POST /api/food/slots/:id/claim` | public / booking roles |
