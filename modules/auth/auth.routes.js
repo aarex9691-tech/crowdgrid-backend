@@ -6,7 +6,13 @@ const { requireAuth, requirePermission } = require('../../middleware/auth');
 const router = express.Router();
 
 // Slow down password guessing
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 50, standardHeaders: true, legacyHeaders: false });
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 50,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Too many attempts from this network. Please wait 15 minutes and try again.' },
+});
 
 router.post('/register', authLimiter, async (req, res) => {
     const { name, phone, email, password } = req.body || {};
@@ -21,8 +27,12 @@ router.get('/me', requireAuth, async (req, res) => {
     res.json(await auth.me(req.user._id));
 });
 
+router.post('/logout-all', requireAuth, async (req, res) => {
+    res.json(await auth.logoutAll(req.user));
+});
+
 router.post('/staff', requireAuth, requirePermission('staff:create'), async (req, res) => {
-    res.status(201).json(await auth.createStaff(req.body || {}));
+    res.status(201).json(await auth.createStaff(req.body || {}, req.user));
 });
 
 module.exports = router;

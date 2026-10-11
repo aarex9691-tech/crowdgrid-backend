@@ -2,6 +2,7 @@ const { Pass } = require('./pass.model');
 const passToken = require('../../utils/passToken');
 const { ROLES } = require('../../config/roles');
 const { badRequest } = require('../../utils/httpError');
+const audit = require('../audit/audit.service');
 
 /** Creates a pass (inside the caller's transaction when `session` is given). */
 const issuePass = async (data, session = null) => {
@@ -49,7 +50,21 @@ const maskPhone = (phone) => (phone ? `${'*'.repeat(6)}${String(phone).slice(-4)
  *     window. Two volunteers scanning the same QR at the same moment: only one
  *     update can match, the other gets "already used".
  */
+/** Scan with an audit trail of every accepted and rejected pass. */
 const scan = async (qr, scanner) => {
+    const result = await scanPass(qr, scanner);
+    audit.record({
+        actor: scanner,
+        action: result.result === 'VALID' ? 'PASS_ACCEPTED' : 'PASS_REJECTED',
+        targetType: 'Pass',
+        targetId: result.pass?._id,
+        summary: `${scanner.name} scanned ${result.pass ? `"${result.pass.title}"` : 'a QR code'}: ${result.result === 'VALID' ? 'valid' : result.reason?.toLowerCase().replace(/_/g, ' ')}`,
+        meta: { reason: result.reason },
+    });
+    return result;
+};
+
+const scanPass = async (qr, scanner) => {
     const decoded = passToken.decode(qr);
     if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
 

@@ -5,6 +5,7 @@ const Provider = require('../provider/provider.model');
 const User = require('../auth/user.model');
 const { issuePass, toClient } = require('../pass/pass.service');
 const { withTransaction } = require('../../utils/tx');
+const audit = require('../audit/audit.service');
 const { ROLES } = require('../../config/roles');
 const { badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
 
@@ -71,7 +72,7 @@ const review = async (applicationId, reviewer, { decision, reason } = {}) => {
         throw forbidden('This application was made to another trust');
     }
 
-    return withTransaction(async (session) => {
+    const result = await withTransaction(async (session) => {
         const updated = await VolunteerApplication.findOneAndUpdate(
             { _id: app._id, status: 'PENDING' },
             { $set: { status: decision, reviewedBy: reviewer._id, reviewedAt: new Date(), rejectionReason: reason } },
@@ -107,6 +108,16 @@ const review = async (applicationId, reviewer, { decision, reason } = {}) => {
         );
         return { application: updated.toObject(), badge: toClient(badge) };
     });
+    // Logged only after the transaction has committed
+    const holderName = (await User.findById(app.userId, 'name').lean())?.name || 'applicant';
+    audit.record({
+        actor: reviewer,
+        action: decision === 'APPROVED' ? 'VOLUNTEER_APPROVED' : 'VOLUNTEER_REJECTED',
+        targetType: 'VolunteerApplication',
+        targetId: app._id,
+        summary: `${reviewer.name} ${decision === 'APPROVED' ? 'approved' : 'rejected'} seva application of ${holderName}`,
+    });
+    return result;
 };
 
 module.exports = { apply, mine, listForReview, review, DOMAIN_LABELS };

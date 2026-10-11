@@ -4,6 +4,7 @@ const Provider = require('../provider/provider.model');
 const Event = require('../event/event.model');
 const { issuePass, toClient, cancelPass } = require('../pass/pass.service');
 const { withTransaction } = require('../../utils/tx');
+const audit = require('../audit/audit.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
 
@@ -146,6 +147,7 @@ const cancel = async (bookingId, user) => {
         if (!booking) throw notFound('Active booking not found');
         await Lodging.updateOne({ _id: booking.lodgingId }, { $inc: { availableBeds: booking.beds } }, { session });
         await cancelPass(booking.passId, session);
+        audit.record({ actor: user, action: 'BOOKING_CANCELLED', targetType: 'LodgingBooking', targetId: booking._id, summary: `${user.name} cancelled a ${booking.beds}-bed booking` });
         return { message: 'Booking cancelled', booking: booking.toObject() };
     });
 };

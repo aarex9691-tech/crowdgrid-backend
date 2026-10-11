@@ -22,6 +22,8 @@ const loadUser = async (token) => {
     }
     const user = await User.findById(decoded.sub).lean();
     if (!user || !user.isActive) throw unauthorized('Account not found or disabled');
+    // "Log out of all devices" bumps tokenVersion; older tokens are rejected
+    if ((decoded.tv || 0) !== (user.tokenVersion || 0)) throw unauthorized('You were logged out. Please log in again.');
     return {
         _id: user._id,
         id: String(user._id),

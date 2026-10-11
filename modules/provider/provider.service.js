@@ -3,6 +3,7 @@ const Provider = require('./provider.model');
 const Event = require('../event/event.model');
 const User = require('../auth/user.model');
 const { withTransaction } = require('../../utils/tx');
+const audit = require('../audit/audit.service');
 const { ROLES } = require('../../config/roles');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
 
@@ -43,7 +44,7 @@ const list = async ({ status, eventId } = {}) => {
 /** Super Admin / Authority verifies or rejects. Verification promotes the applicant to NGO_ADMIN. */
 const decide = async (providerId, reviewer, { decision, reason } = {}) => {
     if (!['VERIFIED', 'REJECTED'].includes(decision)) throw badRequest('decision must be VERIFIED or REJECTED');
-    return withTransaction(async (session) => {
+    const result = await withTransaction(async (session) => {
         const provider = await Provider.findOneAndUpdate(
             { _id: providerId, verificationStatus: 'PENDING' },
             {
@@ -69,6 +70,15 @@ const decide = async (providerId, reviewer, { decision, reason } = {}) => {
         }
         return provider.toObject();
     });
+    // Logged only after the transaction has committed
+    audit.record({
+        actor: reviewer,
+        action: decision === 'VERIFIED' ? 'PROVIDER_VERIFIED' : 'PROVIDER_REJECTED',
+        targetType: 'Provider',
+        targetId: result._id,
+        summary: `${reviewer.name} ${decision === 'VERIFIED' ? 'verified' : 'rejected'} ${result.name}`,
+    });
+    return result;
 };
 
 /** Verified organisations for an event (public: used by the seva form). */

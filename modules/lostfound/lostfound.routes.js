@@ -40,7 +40,7 @@ router.post('/', requireAuth, upload.single('photo'), sanitize, async (req, res)
 });
 
 router.patch('/:id/reunited', requireAuth, requirePermission('report:manage'), async (req, res) => {
-    res.json(await lostfound.markReunited(req.params.id));
+    res.json(await lostfound.markReunited(req.params.id, req.user));
 });
 
 module.exports = router;

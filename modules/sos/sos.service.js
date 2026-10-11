@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const SosIncident = require('./sos.model');
 const { ROLES } = require('../../config/roles');
+const audit = require('../audit/audit.service');
 const { badRequest, notFound, forbidden } = require('../../utils/httpError');
 
 const num = (v) => (v === undefined || v === null || v === '' ? undefined : Number(v));
@@ -71,6 +72,13 @@ const update = async (id, viewer, { status, assignedTo } = {}) => {
     }
     if (assignedTo !== undefined) incident.assignedTo = assignedTo || undefined;
     await incident.save();
+    audit.record({
+        actor: viewer,
+        action: `SOS_${incident.status}`,
+        targetType: 'SosIncident',
+        targetId: incident._id,
+        summary: `${viewer.name} marked an SOS alert ${incident.status.toLowerCase()}${assignedTo ? ' and assigned it' : ''}`,
+    });
     return incident.toObject();
 };
 

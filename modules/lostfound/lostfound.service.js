@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const LostFoundReport = require('./lostfound.model');
 const { hasPermission, STAFF } = require('../../config/roles');
+const audit = require('../audit/audit.service');
 const { badRequest, forbidden, notFound } = require('../../utils/httpError');
 
 const FIELDS = ['eventId', 'personName', 'age', 'gender', 'description', 'clothes', 'lastSeenAt', 'currentlyAt', 'contactPhone'];
@@ -40,9 +41,10 @@ const list = async (viewer, { kind, status = 'OPEN', eventId, q } = {}) => {
     });
 };
 
-const markReunited = async (id) => {
+const markReunited = async (id, actor) => {
     const report = await LostFoundReport.findByIdAndUpdate(id, { $set: { status: 'REUNITED' } }, { returnDocument: 'after' }).lean();
     if (!report) throw notFound('Report not found');
+    audit.record({ actor, action: 'PERSON_REUNITED', targetType: 'LostFoundReport', targetId: report._id, summary: `${actor?.name || 'Staff'} marked ${report.personName || 'a person'} as reunited` });
     return report;
 };
 

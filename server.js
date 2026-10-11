@@ -30,7 +30,16 @@ app.use(express.json({ limit: '100kb' }));
 app.use(sanitize);
 if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
 
-app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, limit: 2000, standardHeaders: true, legacyHeaders: false }));
+app.use(
+    '/api',
+    rateLimit({
+        windowMs: 15 * 60 * 1000,
+        limit: 2000,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { message: 'Too many requests. Please wait a few minutes and try again.' },
+    })
+);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

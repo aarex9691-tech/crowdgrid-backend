@@ -18,6 +18,11 @@ const userSchema = new mongoose.Schema(
         providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', default: null },
         preferredLanguage: { type: String, enum: ['en', 'hi', 'mr'], default: 'en' },
         isActive: { type: Boolean, default: true },
+        // Account lockout after repeated wrong passwords
+        failedLogins: { type: Number, default: 0 },
+        lockUntil: { type: Date },
+        // Bumped by "log out of all devices": tokens carrying an older version stop working
+        tokenVersion: { type: Number, default: 0 },
     },
     { timestamps: true }
 );

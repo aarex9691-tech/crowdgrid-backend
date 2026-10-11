@@ -6,6 +6,7 @@ const { Pass } = require('../pass/pass.model');
 const { ROLES } = require('../../config/roles');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, forbidden, notFound } = require('../../utils/httpError');
+const audit = require('../audit/audit.service');
 
 /**
  * NGO Camp & Kitchen portal. An NGO admin manages only its own provider;
@@ -64,6 +65,7 @@ const addLodging = async (user, body = {}) => {
         totalBeds,
         availableBeds: totalBeds,
     });
+    audit.record({ actor: user, action: 'CAMP_ADDED', targetType: 'Lodging', targetId: lodging._id, summary: `${user.name} added camp "${lodging.name}" with ${totalBeds} beds` });
     return lodging.toObject();
 };
 
@@ -79,6 +81,7 @@ const adjustBeds = async (user, lodgingId, change) => {
     if (delta < 0) filter.availableBeds = { $gte: -delta };
     const updated = await Lodging.findOneAndUpdate(filter, { $inc: { totalBeds: delta, availableBeds: delta } }, { returnDocument: 'after' }).lean();
     if (!updated) throw badRequest('Cannot remove beds that are already booked');
+    audit.record({ actor: user, action: 'BEDS_ADJUSTED', targetType: 'Lodging', targetId: lodging._id, summary: `${user.name} ${delta > 0 ? 'added' : 'removed'} ${Math.abs(delta)} beds at "${lodging.name}"` });
     return updated;
 };
 
@@ -126,6 +129,7 @@ const setSlot = async (user, centerId, { date, meal, capacity } = {}) => {
     if (delta < 0) filter.remaining = { $gte: -delta };
     const updated = await FoodSlot.findOneAndUpdate(filter, { $inc: { capacity: delta, remaining: delta } }, { returnDocument: 'after' }).lean();
     if (!updated) throw badRequest('Capacity cannot be lower than tokens already issued');
+    audit.record({ actor: user, action: 'MEAL_QUOTA_CHANGED', targetType: 'FoodSlot', targetId: existing._id, summary: `${user.name} set ${meal.toLowerCase()} quota at "${center.name}" on ${date} to ${cap}` });
     return updated;
 };
 
