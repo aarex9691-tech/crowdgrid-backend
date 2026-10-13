@@ -52,8 +52,9 @@ npm run test:flows
 ```
 
 It checks phone validation, tent and bed numbers, the cart with simulated
-payment, family meal tokens and the personal QR against your database, then
-deletes everything it created.
+payment, family meal tokens, the profile rules (date of birth must make the
+user 18 or older) and the personal QR against your database, then deletes
+everything it created.
 
 **Simulated payment (demo, no real money):** UPI `anything@okaxis` is approved,
 `fail@upi` is declined. Card `4242 4242 4242 4242` is approved,

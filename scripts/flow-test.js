@@ -110,6 +110,12 @@ async function main() {
         check('Profile saves email, date of birth, gender, city, emergency contact', prof.email === 'flow.test@example.com' && prof.gender === 'FEMALE' && prof.city === 'Pune' && !!prof.dateOfBirth && prof.emergencyContact?.phone === '9876543210');
         await auth.updateProfile(user, { city: '' });
         check('Clearing a field removes it from the database', !(await User.findById(me._id).lean()).city);
+        {
+            const [ty, tm, td] = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()).split('-');
+            await expectError('Date of birth under 18 is refused', () => auth.updateProfile(user, { dateOfBirth: `${ty - 17}-${tm}-${td}` }), 400);
+            const p18 = await auth.updateProfile(user, { dateOfBirth: `${ty - 18}-${tm}-${td}` });
+            check('Turning 18 today is accepted', !!p18.dateOfBirth);
+        }
 
         // ---- 7. Hosting a paid public event ----
         const authorityUser = await User.findOne({ phone: '9000000002' }).lean();

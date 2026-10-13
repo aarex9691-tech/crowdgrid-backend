@@ -6,6 +6,21 @@ const { HttpError, badRequest, unauthorized, conflict, notFound } = require('../
 const audit = require('../audit/audit.service');
 
 const SALT_ROUNDS = 10;
+const MIN_AGE = 18;
+const MAX_AGE = 120;
+
+/** Age in whole years on today's date in India (birthday not yet reached = one year less). */
+function ageOn(isoDay) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay);
+    if (!m) return null;
+    const [y, mo, d] = m.slice(1).map(Number);
+    const check = new Date(Date.UTC(y, mo - 1, d));
+    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return null; // e.g. 31 Feb
+    const [ty, tm, td] = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()).split('-').map(Number);
+    let age = ty - y;
+    if (tm < mo || (tm === mo && td < d)) age -= 1;
+    return age < 0 ? null : age;
+}
 const MAX_FAILED_LOGINS = 5;
 const LOCK_MINUTES = 15;
 
@@ -173,10 +188,10 @@ const updateProfile = async (user, body = {}) => {
     if (body.dateOfBirth !== undefined) {
         const raw = String(body.dateOfBirth || '');
         if (raw) {
-            const dob = new Date(`${raw}T00:00:00+05:30`);
-            const age = (Date.now() - dob.getTime()) / (365.25 * 86400000);
-            if (Number.isNaN(dob.getTime()) || age < 1 || age > 120) throw badRequest('Enter a valid date of birth');
-            put('dateOfBirth', dob);
+            const age = ageOn(raw);
+            if (age === null || age > MAX_AGE) throw badRequest('Enter a valid date of birth');
+            if (age < MIN_AGE) throw badRequest(`You must be at least ${MIN_AGE} years old to use CrowdGrid`);
+            put('dateOfBirth', new Date(`${raw}T00:00:00+05:30`));
         } else put('dateOfBirth', '');
     }
     if (body.gender !== undefined) {
@@ -207,4 +222,4 @@ const updateProfile = async (user, body = {}) => {
     return updated.toPublic();
 };
 
-module.exports = { register, login, me, createStaff, logoutAll, updateProfile, SALT_ROUNDS };
+module.exports = { register, login, me, createStaff, logoutAll, updateProfile, ageOn, MIN_AGE, SALT_ROUNDS };
