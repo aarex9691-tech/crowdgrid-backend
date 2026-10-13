@@ -7,7 +7,7 @@ const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
 const { hasPermission, ROLES } = require('../../config/roles');
 const audit = require('../audit/audit.service');
-const { badRequest, forbidden, notFound, conflict } = require('../../utils/httpError');
+const { HttpError, badRequest, forbidden, notFound, conflict } = require('../../utils/httpError');
 
 const findEvent = async (idOrSlug, projection) => {
     const query = mongoose.isValidObjectId(idOrSlug) ? { _id: idOrSlug } : { slug: String(idOrSlug).toLowerCase() };
@@ -22,6 +22,8 @@ const list = async ({ kind } = {}) => {
     // Corporate events are invite-only: never listed publicly. Invitees reach them
     // through their invitation link or by entering their access code.
     filter.kind = kind && String(kind).toUpperCase() !== 'CORPORATE' ? String(kind).toUpperCase() : { $ne: 'CORPORATE' };
+    // Public events disappear from listings once they are over
+    filter.$or = [{ kind: { $ne: 'PUBLIC' } }, { endDate: { $gte: new Date() } }];
     const events = await Event.find(filter).sort({ isFlagship: -1, startDate: 1 }).lean();
 
     const yatraIds = events.filter((e) => e.kind === 'YATRA').map((e) => e._id);
@@ -67,20 +69,77 @@ const assertCanManageKind = (user, kind) => {
     if (!hasPermission(user.role, perm)) throw forbidden(`Your role cannot manage ${kind.toLowerCase()} events`);
 };
 
-const ALLOWED_FIELDS = [
-    'title', 'kind', 'tagline', 'description', 'city', 'state', 'venue', 'startDate', 'endDate', 'coverImage',
-    'isFlagship', 'expectedFootfall', 'keyDates', 'sectors', 'capacity', 'companyName', 'accessCode', 'sessions',
-];
-const pick = (body) => Object.fromEntries(ALLOWED_FIELDS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]]));
+// Only the fields that belong to each kind of event are ever stored
+const COMMON_FIELDS = ['title', 'kind', 'description', 'city', 'state', 'venue', 'startDate', 'endDate'];
+const KIND_FIELDS = {
+    YATRA: ['tagline', 'isFlagship', 'expectedFootfall', 'keyDates', 'sectors'],
+    PUBLIC: ['category', 'address', 'pincode', 'location', 'ticketPrice', 'minAge', 'hostName', 'contactPhone', 'capacity'],
+    CORPORATE: ['companyName', 'sessions', 'capacity'],
+};
+const pick = (body, kind) => {
+    const fields = [...COMMON_FIELDS, ...(KIND_FIELDS[kind] || [])];
+    return Object.fromEntries(
+        fields.filter((k) => body[k] !== undefined && body[k] !== null && body[k] !== '').map((k) => [k, typeof body[k] === 'string' ? body[k].trim() : body[k]])
+    );
+};
+
+const PUBLIC_CATEGORIES = ['SPIRITUAL', 'CULTURAL', 'HERITAGE_WALK', 'SEVA', 'WORKSHOP', 'OTHER'];
+
+/** Checks a paid public event before it is saved; returns the cleaned data. */
+const validatePublic = (data, user) => {
+    const need = (k, label) => {
+        if (data[k] === undefined || data[k] === '') throw badRequest(`${label} is required`);
+    };
+    need('title', 'Title');
+    need('description', 'Description');
+    need('venue', 'Venue');
+    need('address', 'Address');
+    need('city', 'City');
+    need('startDate', 'Start date and time');
+    need('endDate', 'End date and time');
+    if (String(data.title).length > 100) throw badRequest('Title can be at most 100 characters');
+    const desc = String(data.description);
+    if (desc.length < 20) throw badRequest('Description must be at least 20 characters');
+    if (desc.length > 500) throw badRequest('Description can be at most 500 characters');
+    data.category = String(data.category || '').toUpperCase();
+    if (!PUBLIC_CATEGORIES.includes(data.category)) throw badRequest(`Category must be one of ${PUBLIC_CATEGORIES.join(', ')}`);
+    if (data.pincode !== undefined && !/^\d{6}$/.test(String(data.pincode))) throw badRequest('Pincode must be 6 digits');
+    const price = Number(data.ticketPrice);
+    if (!Number.isInteger(price) || price < 1 || price > 100000) throw badRequest('Ticket price must be between ₹1 and ₹1,00,000 (public events are paid)');
+    data.ticketPrice = price;
+    const cap = Number(data.capacity);
+    if (!Number.isInteger(cap) || cap < 1 || cap > 100000) throw badRequest('Capacity must be between 1 and 1,00,000 people');
+    data.capacity = cap;
+    if (data.minAge !== undefined) {
+        const a = Number(data.minAge);
+        if (!Number.isInteger(a) || a < 0 || a > 100) throw badRequest('Minimum age must be between 0 and 100');
+        data.minAge = a || undefined;
+    }
+    if (data.contactPhone !== undefined) {
+        data.contactPhone = String(data.contactPhone).replace(/\D/g, '');
+        if (!/^[6-9]\d{9}$/.test(data.contactPhone)) throw badRequest('Contact number must be a 10-digit Indian mobile number');
+    }
+    if (data.location !== undefined) {
+        const lat = Number(data.location?.lat);
+        const lng = Number(data.location?.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw badRequest('Map location is not valid');
+        data.location = { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 };
+    }
+    data.hostName = data.hostName ? String(data.hostName).slice(0, 80) : user.name;
+    data.attendeesCount = 0;
+    return data;
+};
 
 const create = async (body, user) => {
-    const data = pick(body || {});
-    data.kind = String(data.kind || '').toUpperCase();
-    if (!['YATRA', 'PUBLIC', 'CORPORATE'].includes(data.kind)) throw badRequest('kind must be YATRA, PUBLIC or CORPORATE');
+    const kind = String(body?.kind || '').toUpperCase();
+    if (!['YATRA', 'PUBLIC', 'CORPORATE'].includes(kind)) throw badRequest('kind must be YATRA, PUBLIC or CORPORATE');
+    const data = pick(body || {}, kind);
+    data.kind = kind;
     assertCanManageKind(user, data.kind);
-    // Corporate access codes are always generated by the server (never chosen by people)
-    delete data.accessCode;
+    if (data.kind === 'PUBLIC') validatePublic(data, user);
     if (data.kind === 'CORPORATE') {
+        data.attendeesCount = 0;
+        // Corporate access codes are always generated by the server (never chosen by people)
         data.accessCode = await uniqueAccessCode();
         if (!data.companyName) throw badRequest('Company name is required for corporate events');
         data.sessions = normaliseSessions(data.sessions);
@@ -219,9 +278,13 @@ const update = async (id, body, user) => {
     const event = await findEvent(id);
     assertCanManageKind(user, event.kind);
     assertOwnerOrAdmin(event, user);
-    const data = pick(body || {});
+    const data = pick(body || {}, event.kind);
     delete data.kind; // kind cannot change
-    delete data.accessCode; // use regenerateCorporateCode instead
+    if (event.kind === 'PUBLIC') {
+        const merged = validatePublic({ ...event.toObject(), ...data }, user);
+        for (const k of KIND_FIELDS.PUBLIC) if (data[k] !== undefined) data[k] = merged[k];
+        delete data.attendeesCount;
+    }
     if (data.capacity !== undefined && Number(data.capacity) < event.attendeesCount) {
         throw badRequest(`Capacity cannot be below the ${event.attendeesCount} people already registered`);
     }
@@ -242,48 +305,83 @@ const archive = async (id, user) => {
     return { message: 'Event archived' };
 };
 
-/**
- * Public event RSVP.
- * Atomic seat claim: the $expr filter only matches while attendeesCount < capacity,
- * so concurrent RSVPs can never push the headcount past capacity. The pass's
- * unique dedupeKey stops the same user registering twice.
- */
-const rsvp = async (eventId, user) => {
+/** Price check for the cart: one paid ticket for one person. */
+const quote = async (eventId, user) => {
     const event = await findEvent(eventId);
-    if (event.kind !== 'PUBLIC') throw badRequest('RSVP is only for public events');
+    if (event.kind !== 'PUBLIC' || event.status !== 'ACTIVE') throw badRequest('Tickets are only sold for public events');
     if (event.endDate < new Date()) throw badRequest('This event has already ended');
+    if ((event.attendeesCount || 0) >= event.capacity) throw conflict('Sorry, this event is full');
+    if (user && (await Pass.exists({ dedupeKey: `PUBLIC:${event._id}:${user._id}` }))) throw conflict('You are already registered for this event');
+    const when = event.startDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    return { event, label: event.title, detail: `1 ticket - ${when} - ${event.venue}, ${event.city}`, amount: event.ticketPrice || 0 };
+};
+
+/**
+ * Registration for a public event (paid at checkout).
+ * Atomic seat claim: the $expr filter only matches while attendeesCount < capacity,
+ * so concurrent registrations can never push the headcount past capacity. The
+ * pass's unique dedupeKey stops the same person registering twice.
+ */
+const register = async (eventId, user, { paidByOrder = null } = {}) => {
+    const event = await findEvent(eventId);
+    if (event.kind !== 'PUBLIC') throw badRequest('Registration is only for public events');
+    if (event.endDate < new Date()) throw badRequest('This event has already ended');
+    if ((event.ticketPrice || 0) > 0 && !paidByOrder) {
+        throw new HttpError(402, `Tickets cost ₹${event.ticketPrice}. Add the event to your cart and pay at checkout.`);
+    }
 
     const dedupeKey = `PUBLIC:${event._id}:${user._id}`;
-    if (await Pass.exists({ dedupeKey })) throw conflict("You have already RSVP'd to this event");
+    if (await Pass.exists({ dedupeKey })) throw conflict('You are already registered for this event');
 
     // Claim a seat atomically, outside any transaction
     const claimed = await Event.findOneAndUpdate(
-        { _id: event._id, $expr: { $lt: ['$attendeesCount', '$capacity'] } },
+        { _id: event._id, $expr: { $lt: [{ $ifNull: ['$attendeesCount', 0] }, '$capacity'] } },
         { $inc: { attendeesCount: 1 } },
         { returnDocument: 'after' }
     );
     if (!claimed) throw conflict('Sorry, this event is full');
     try {
-        const pass = await issuePass(
-            {
-                type: 'PUBLIC',
-                userId: user._id,
-                eventId: event._id,
-                refId: event._id,
-                title: event.title,
-                subtitle: `${event.venue || event.city} - Entry pass`,
-                details: { venue: event.venue, city: event.city, startsAt: event.startDate },
-                validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
-                validUntil: event.endDate,
-                dedupeKey,
-            }
-        );
+        const pass = await issuePass({
+            type: 'PUBLIC',
+            userId: user._id,
+            eventId: event._id,
+            refId: event._id,
+            title: event.title,
+            subtitle: `${event.venue}, ${event.city} - Entry ticket`,
+            details: {
+                venue: event.venue,
+                address: event.address,
+                city: event.city,
+                startsAt: event.startDate,
+                ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
+            },
+            validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
+            validUntil: event.endDate,
+            dedupeKey,
+        });
         return { message: "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
     } catch (err) {
         await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -1 } });
-        if (err.code === 11000) throw conflict("You have already RSVP'd to this event");
+        if (err.code === 11000) throw conflict('You are already registered for this event');
         throw err;
     }
+};
+
+/** Public events hosted by this admin (all of them for a Super Admin), with sales. */
+const hostedEvents = async (user) => {
+    if (!hasPermission(user.role, 'event:create:public')) throw forbidden('Only authorised hosts can manage public events');
+    const filter = { kind: 'PUBLIC' };
+    if (user.role !== ROLES.SUPER_ADMIN) filter.organizerId = user._id;
+    const events = await Event.find(filter).sort({ startDate: -1 }).lean();
+    const counts = await Pass.aggregate([
+        { $match: { type: 'PUBLIC', eventId: { $in: events.map((e) => e._id) }, status: { $ne: 'CANCELLED' } } },
+        { $group: { _id: '$eventId', sold: { $sum: 1 }, checkedIn: { $sum: { $cond: [{ $eq: ['$status', 'REDEEMED'] }, 1, 0] } } } },
+    ]);
+    const byEvent = new Map(counts.map((c) => [String(c._id), c]));
+    return events.map((e) => {
+        const c = byEvent.get(String(e._id));
+        return { ...e, ticketsSold: c?.sold || 0, checkedIn: c?.checkedIn || 0, revenue: (c?.sold || 0) * (e.ticketPrice || 0) };
+    });
 };
 
 const checkCode = async (eventId, code) => {
@@ -335,7 +433,10 @@ const claimCorporateBadge = async (eventId, user, { code, sessions = [] }) => {
 };
 
 module.exports = {
-    findEvent, list, get, create, update, archive, rsvp,
+    quote,
+    register,
+    hostedEvents,
+    findEvent, list, get, create, update, archive,
     verifyCorporateCode, claimCorporateBadge, getCorporateCode, regenerateCorporateCode, generateAccessCode,
     myCorporateEvents, corporateAttendees, findByAccessCode,
 };

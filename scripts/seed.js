@@ -124,30 +124,54 @@ async function main() {
         organizerId: authority._id,
     });
 
-    const cleanup = await Event.create({
-        title: 'Godavari Ghat Cleanup Drive',
-        slug: 'godavari-ghat-cleanup',
-        kind: 'PUBLIC',
-        description: 'Join citizens and seva groups to clean the ghats ahead of Dhwajarohan. Gloves and bags provided.',
-        city: 'Nashik',
-        venue: 'Ramkund Ghat',
-        startDate: istDateTime(addDays(today, 3), '07:00'),
-        endDate: istDateTime(addDays(today, 3), '11:00'),
+    // Public events are paid: tickets are bought at checkout (simulated payment)
+    const pub = (o) => ({ kind: 'PUBLIC', city: 'Nashik', state: 'Maharashtra', hostName: authority.name, contactPhone: '9000000002', organizerId: authority._id, attendeesCount: 0, ...o });
+    const cleanup = await Event.create(pub({
+        title: 'Ramkund Maha Aarti: Riverside Seating',
+        slug: 'ramkund-maha-aarti',
+        category: 'SPIRITUAL',
+        description: 'Reserved riverside seating for the evening Godavari Maha Aarti at Ramkund, with diya and prasad. Arrive 30 minutes early; footwear stands at Gate 2.',
+        venue: 'Ramkund Ghat, Gate 2',
+        address: 'Ramkund, Panchavati, Nashik',
+        pincode: '422003',
+        location: { lat: 20.0059, lng: 73.7897 },
+        startDate: istDateTime(addDays(today, 3), '18:30'),
+        endDate: istDateTime(addDays(today, 3), '20:00'),
         capacity: 60,
-        organizerId: authority._id,
-    });
-    await Event.create({
+        attendeesCount: 12,
+        ticketPrice: 199,
+    }));
+    await Event.create(pub({
         title: 'Panchavati Heritage Walk',
         slug: 'panchavati-heritage-walk',
-        kind: 'PUBLIC',
-        description: 'A guided morning walk through Kalaram Mandir, Sita Gufa and the ghats. Small group.',
-        city: 'Nashik',
-        venue: 'Kalaram Mandir gate',
+        category: 'HERITAGE_WALK',
+        description: 'A guided morning walk through Kalaram Mandir, Sita Gufa and the ghats with a local historian. Small group, comfortable shoes recommended.',
+        venue: 'Kalaram Mandir main gate',
+        address: 'Kalaram Mandir Road, Panchavati, Nashik',
+        pincode: '422003',
+        location: { lat: 20.0072, lng: 73.7934 },
         startDate: istDateTime(addDays(today, 5), '06:30'),
         endDate: istDateTime(addDays(today, 5), '09:00'),
         capacity: 2,
-        organizerId: authority._id,
-    });
+        attendeesCount: 2,
+        ticketPrice: 150,
+        minAge: 10,
+    }));
+    await Event.create(pub({
+        title: 'Bhajan Sandhya at Kalidas Kala Mandir',
+        slug: 'bhajan-sandhya-kalidas',
+        category: 'CULTURAL',
+        description: 'An evening of Marathi and Hindi bhajans by local mandals, ahead of Dhwajarohan. Seated auditorium, live accompaniment.',
+        venue: 'Mahakavi Kalidas Kala Mandir',
+        address: 'Shalimar, Nashik',
+        pincode: '422001',
+        location: { lat: 19.9993, lng: 73.7838 },
+        startDate: istDateTime(addDays(today, 6), '19:00'),
+        endDate: istDateTime(addDays(today, 6), '21:30'),
+        capacity: 400,
+        attendeesCount: 137,
+        ticketPrice: 99,
+    }));
     await Event.create({
         title: 'Simhastha Infrastructure & CSR Summit',
         slug: 'simhastha-csr-summit',

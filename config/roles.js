@@ -41,8 +41,9 @@ const PERMISSIONS = Object.freeze({
     // Scan QR entry / meal tokens
     'pass:scan': [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, NGO_ADMIN, VOLUNTEER],
 
-    // Book lodging / food passes / tickets (Super Admin = test mode, Corporate = attendee mode)
-    'booking:create': [SUPER_ADMIN, CORPORATE_ADMIN, USER],
+    // Book lodging / food passes / tickets: pilgrims and attendees only.
+    // Admins and hosts run the event; they use their own dashboards and never book.
+    'booking:create': [USER],
 
     // Volunteering
     'volunteer:apply': [USER],

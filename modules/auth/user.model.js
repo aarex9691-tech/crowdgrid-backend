@@ -17,14 +17,22 @@ const userSchema = new mongoose.Schema(
         passwordHash: { type: String, required: true, select: false },
         role: { type: String, enum: Object.values(ROLES), default: ROLES.USER },
         // NGO admins and volunteers belong to a service provider (NGO / trust)
-        providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', default: null },
-        preferredLanguage: { type: String, enum: ['en', 'hi', 'mr'], default: 'en' },
+        providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider' }, // only for NGO staff
+        // Optional profile, filled in from "Edit profile" (empty values are not stored)
+        dateOfBirth: Date,
+        gender: { type: String, enum: ['FEMALE', 'MALE', 'OTHER'] },
+        city: { type: String, trim: true, maxlength: 60 },
+        emergencyContact: {
+            _id: false,
+            name: { type: String, trim: true, maxlength: 60 },
+            phone: { type: String, match: [/^\d{10}$/, 'Emergency contact must be a 10-digit number'] },
+        },
         isActive: { type: Boolean, default: true },
         // Account lockout after repeated wrong passwords
-        failedLogins: { type: Number, default: 0 },
+        failedLogins: Number, // only stored after a wrong password
         lockUntil: { type: Date },
         // Bumped by "log out of all devices": tokens carrying an older version stop working
-        tokenVersion: { type: Number, default: 0 },
+        tokenVersion: Number, // only stored after "log out of all devices"
         // Personal "one QR for everything" (see utils/passToken.js); reset to revoke old copies
         qrNonce: { type: String, select: false },
     },
@@ -43,7 +51,10 @@ userSchema.methods.toPublic = function toPublic() {
         email: this.email,
         role: this.role,
         providerId: this.providerId,
-        preferredLanguage: this.preferredLanguage,
+        dateOfBirth: this.dateOfBirth,
+        gender: this.gender,
+        city: this.city,
+        emergencyContact: this.emergencyContact?.phone ? this.emergencyContact : undefined,
     };
 };
 

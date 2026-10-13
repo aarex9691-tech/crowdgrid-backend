@@ -21,6 +21,11 @@ router.post('/corporate/redeem', requireAuth, codeAttempts, async (req, res) => 
     res.json(await events.findByAccessCode(req.body && req.body.code));
 });
 
+// Public events this host created, with tickets sold and revenue
+router.get('/hosted/mine', requireAuth, async (req, res) => {
+    res.json(await events.hostedEvents(req.user));
+});
+
 router.get('/corporate/mine', requireAuth, async (req, res) => {
     res.json(await events.myCorporateEvents(req.user));
 });
@@ -46,8 +51,9 @@ router.delete('/:id', requireAuth, async (req, res) => {
     res.json(await events.archive(req.params.id, req.user));
 });
 
-router.post('/:id/rsvp', requireAuth, requirePermission('booking:create'), async (req, res) => {
-    res.status(201).json(await events.rsvp(req.params.id, req.user));
+// Free public events (none today: all public events are paid and go through /api/orders)
+router.post('/:id/register', requireAuth, requirePermission('booking:create'), async (req, res) => {
+    res.status(201).json(await events.register(req.params.id, req.user));
 });
 
 router.post('/:id/corporate/verify', requireAuth, codeAttempts, async (req, res) => {

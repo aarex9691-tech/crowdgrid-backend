@@ -9,9 +9,9 @@ const mongoose = require('mongoose');
  */
 const itemSchema = new mongoose.Schema(
     {
-        kind: { type: String, enum: ['LODGING', 'TRANSIT'], required: true },
-        refId: { type: mongoose.Schema.Types.ObjectId, required: true }, // lodging or route
-        input: { type: mongoose.Schema.Types.Mixed, default: {} }, // beds, dates, guest names
+        kind: { type: String, enum: ['LODGING', 'TRANSIT', 'EVENT'], required: true },
+        refId: { type: mongoose.Schema.Types.ObjectId, required: true }, // lodging, route or public event
+        input: mongoose.Schema.Types.Mixed, // beds, dates, guest names (lodging only)
         label: String,
         detail: String,
         amount: { type: Number, required: true, min: 0 }, // rupees

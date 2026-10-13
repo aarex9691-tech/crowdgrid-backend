@@ -20,6 +20,7 @@ const lodging = require('../modules/lodging/lodging.service');
 const food = require('../modules/food/food.service');
 const orders = require('../modules/order/order.service');
 const passes = require('../modules/pass/pass.service');
+const events = require('../modules/event/event.service');
 const { detectTransactionSupport } = require('../utils/tx');
 const { istDate } = require('../utils/time');
 
@@ -43,6 +44,7 @@ async function main() {
     const PHONE = '6999999990';
     await User.deleteMany({ phone: PHONE });
     let me;
+    let hostedId;
     try {
         // ---- 1. Phone numbers ----
         await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'T', phone: '900000000612', password: 'Crowd@123' }), 400);
@@ -102,7 +104,34 @@ async function main() {
             console.log('SKIP  family meal token (all of today\'s meal windows are over; run before 10 pm)');
         }
 
-        // ---- 6. One personal QR ----
+        // ---- 6. Profile ----
+        const prof = await auth.updateProfile(user, { email: 'flow.test@example.com', dateOfBirth: '1990-05-14', gender: 'female', city: 'Pune', emergencyContact: { name: 'Raj', phone: '9876543210' } });
+        check('Profile saves email, date of birth, gender, city, emergency contact', prof.email === 'flow.test@example.com' && prof.gender === 'FEMALE' && prof.city === 'Pune' && !!prof.dateOfBirth && prof.emergencyContact?.phone === '9876543210');
+        await auth.updateProfile(user, { city: '' });
+        check('Clearing a field removes it from the database', !(await User.findById(me._id).lean()).city);
+
+        // ---- 7. Hosting a paid public event ----
+        const authorityUser = await User.findOne({ phone: '9000000002' }).lean();
+        const host = { ...authorityUser, id: String(authorityUser._id) };
+        const start = new Date(Date.now() + 2 * 864e5);
+        const base = { kind: 'PUBLIC', title: 'Flow test aarti', category: 'SPIRITUAL', description: 'A test event created by the flow test script.', venue: 'Test ghat', address: 'Ramkund, Nashik', city: 'Nashik', pincode: '422003', location: { lat: 20.0059, lng: 73.7897 }, startDate: start, endDate: new Date(start.getTime() + 2 * 3600e3), capacity: 5 };
+        await expectError('Free public events are refused (all are paid)', () => events.create({ ...base, ticketPrice: 0 }, host), 400);
+        await expectError('Description over 500 characters is refused', () => events.create({ ...base, ticketPrice: 99, description: 'x'.repeat(501) }, host), 400);
+        await expectError('A pilgrim cannot host an event', () => events.create({ ...base, ticketPrice: 99 }, user), 403);
+        hostedId = (await events.create({ ...base, ticketPrice: 99, sectors: ['should be dropped'] }, host))._id;
+        const stored = await Event.findById(hostedId).lean();
+        check('Host event saved with address, map point and price; unrelated fields dropped', stored.ticketPrice === 99 && stored.location?.lat === 20.0059 && stored.sectors === undefined && stored.keyDates === undefined);
+        await expectError('Registering without paying asks for payment', () => events.register(hostedId, user), 402);
+        const tOrder = await orders.create(user, [{ kind: 'EVENT', refId: String(hostedId) }]);
+        const tPaid = await orders.pay(tOrder._id, user, { method: 'CARD', cardNumber: '4242424242424242', expiry: '12/30', cvv: '123' });
+        check('Ticket bought at checkout issues an entry pass', tPaid.status === 'PAID' && tPaid.passes[0]?.type === 'PUBLIC', `₹${tPaid.total}`);
+        const hosted = await events.hostedEvents(host);
+        const mineHosted = hosted.find((e) => String(e._id) === String(hostedId));
+        check('Host dashboard shows tickets sold and revenue', mineHosted?.ticketsSold === 1 && mineHosted?.revenue === 99);
+        const { hasPermission } = require('../config/roles');
+        check('Admins and hosts cannot book (they use their own dashboards)', ['SUPER_ADMIN', 'AUTHORITY', 'CORPORATE_ADMIN', 'NGO_ADMIN', 'VOLUNTEER'].every((r) => !hasPermission(r, 'booking:create')) && hasPermission('USER', 'booking:create'));
+
+        // ---- 8. One personal QR ----
         const { qr } = await passes.myQr(user);
         const staff = await User.findOne({ phone: '9000000002' }).lean(); // authority can scan everywhere
         const scanner = { ...staff, id: String(staff._id) };
@@ -121,6 +150,10 @@ async function main() {
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
             await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id })]);
             await User.deleteOne({ _id: me._id });
+        }
+        if (hostedId) {
+            await Pass.deleteMany({ eventId: hostedId });
+            await Event.deleteOne({ _id: hostedId });
         }
         await mongoose.disconnect();
         console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed. Test data cleaned up.');

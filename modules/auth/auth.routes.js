@@ -27,6 +27,11 @@ router.get('/me', requireAuth, async (req, res) => {
     res.json(await auth.me(req.user._id));
 });
 
+// Edit profile (email, date of birth, gender, city, emergency contact)
+router.patch('/me', requireAuth, async (req, res) => {
+    res.json(await auth.updateProfile(req.user, req.body || {}));
+});
+
 router.post('/logout-all', requireAuth, async (req, res) => {
     res.json(await auth.logoutAll(req.user));
 });

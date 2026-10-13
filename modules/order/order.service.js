@@ -3,6 +3,7 @@ const Order = require('./order.model');
 const { gateway } = require('./payment');
 const lodging = require('../lodging/lodging.service');
 const transit = require('../transit/transit.service');
+const events = require('../event/event.service');
 const { Pass } = require('../pass/pass.model');
 const { toClient } = require('../pass/pass.service');
 const audit = require('../audit/audit.service');
@@ -11,7 +12,7 @@ const { HttpError, badRequest, notFound, conflict } = require('../../utils/httpE
 const MAX_ITEMS = 10;
 
 /** Prices one cart line on the server (the browser's price is never trusted). */
-const priceItem = async (raw) => {
+const priceItem = async (raw, user) => {
     const kind = String(raw?.kind || '').toUpperCase();
     const refId = String(raw?.refId || '');
     if (!mongoose.isValidObjectId(refId)) throw badRequest('Invalid item in cart');
@@ -27,9 +28,13 @@ const priceItem = async (raw) => {
     }
     if (kind === 'TRANSIT') {
         const q = await transit.quote(refId);
-        return { kind, refId, input: {}, label: q.label, detail: q.detail, amount: q.amount };
+        return { kind, refId, label: q.label, detail: q.detail, amount: q.amount };
     }
-    throw badRequest('Only paid camps and bus passes go through checkout');
+    if (kind === 'EVENT') {
+        const q = await events.quote(refId, user);
+        return { kind, refId, label: q.label, detail: q.detail, amount: q.amount };
+    }
+    throw badRequest('Only paid camps, bus passes and event tickets go through checkout');
 };
 
 const toView = (order, passes = []) => {
@@ -44,7 +49,7 @@ const create = async (user, items) => {
     const priced = [];
     for (const raw of items) {
         try {
-            priced.push(await priceItem(raw));
+            priced.push(await priceItem(raw, user));
         } catch (err) {
             throw new HttpError(err.status || 400, `${raw?.label || 'An item'}: ${err.message}`);
         }
@@ -71,7 +76,9 @@ const fulfil = async (order, user) => {
             const res =
                 item.kind === 'LODGING'
                     ? await lodging.book(item.refId, user, item.input || {}, { paidByOrder })
-                    : await transit.boardingPass(item.refId, user, { paidByOrder });
+                    : item.kind === 'EVENT'
+                      ? await events.register(item.refId, user, { paidByOrder })
+                      : await transit.boardingPass(item.refId, user, { paidByOrder });
             if (res.existing) throw new Error('You already had a pass for this today');
             item.status = 'ISSUED';
             item.passId = res.pass._id;

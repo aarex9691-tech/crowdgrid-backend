@@ -143,4 +143,68 @@ const createStaff = async ({ name, phone, countryCode, email, password, role, pr
     return user.toPublic();
 };
 
-module.exports = { register, login, me, createStaff, logoutAll, SALT_ROUNDS };
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i;
+const GENDERS = ['FEMALE', 'MALE', 'OTHER'];
+
+/**
+ * Edit profile: name, email, date of birth, gender, city, emergency contact.
+ * A field sent empty is removed from the database rather than stored blank.
+ */
+const updateProfile = async (user, body = {}) => {
+    const set = {};
+    const unset = {};
+    const put = (k, v) => {
+        if (v === undefined) return;
+        if (v === null || v === '') unset[k] = 1;
+        else set[k] = v;
+    };
+
+    if (body.name !== undefined) {
+        const name = String(body.name).trim();
+        if (name.length < 2 || name.length > 80) throw badRequest('Name must be 2 to 80 characters');
+        set.name = name;
+    }
+    if (body.email !== undefined) {
+        const email = String(body.email || '').trim().toLowerCase();
+        if (email && !EMAIL_RE.test(email)) throw badRequest('Enter a valid email address');
+        if (email && (await User.exists({ email, _id: { $ne: user._id } }))) throw conflict('This email is already used by another account');
+        put('email', email);
+    }
+    if (body.dateOfBirth !== undefined) {
+        const raw = String(body.dateOfBirth || '');
+        if (raw) {
+            const dob = new Date(`${raw}T00:00:00+05:30`);
+            const age = (Date.now() - dob.getTime()) / (365.25 * 86400000);
+            if (Number.isNaN(dob.getTime()) || age < 1 || age > 120) throw badRequest('Enter a valid date of birth');
+            put('dateOfBirth', dob);
+        } else put('dateOfBirth', '');
+    }
+    if (body.gender !== undefined) {
+        const g = String(body.gender || '').toUpperCase();
+        if (g && !GENDERS.includes(g)) throw badRequest('Gender must be Female, Male or Other');
+        put('gender', g);
+    }
+    if (body.city !== undefined) {
+        const c = String(body.city || '').trim();
+        if (c.length > 60) throw badRequest('City can be at most 60 characters');
+        put('city', c);
+    }
+    if (body.emergencyContact !== undefined) {
+        const n = String(body.emergencyContact?.name || '').trim();
+        const ph = String(body.emergencyContact?.phone || '').replace(/\D/g, '');
+        if (!n && !ph) unset.emergencyContact = 1;
+        else {
+            if (!/^\d{10}$/.test(ph)) throw badRequest('Emergency contact number must be 10 digits');
+            if (n.length > 60) throw badRequest('Emergency contact name can be at most 60 characters');
+            set.emergencyContact = { name: n || undefined, phone: ph };
+        }
+    }
+    const update = {};
+    if (Object.keys(set).length) update.$set = set;
+    if (Object.keys(unset).length) update.$unset = unset;
+    if (!Object.keys(update).length) throw badRequest('Nothing to update');
+    const updated = await User.findByIdAndUpdate(user._id, update, { returnDocument: 'after', runValidators: true });
+    return updated.toPublic();
+};
+
+module.exports = { register, login, me, createStaff, logoutAll, updateProfile, SALT_ROUNDS };
