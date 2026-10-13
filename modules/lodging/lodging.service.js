@@ -7,7 +7,7 @@ const { withTransaction } = require('../../utils/tx');
 const bedAlloc = require('./beds');
 const audit = require('../audit/audit.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
-const { badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
+const { HttpError, badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
 
 const MAX_BEDS_PER_USER = 4;
 
@@ -55,7 +55,38 @@ const parseStay = (event, checkIn, checkOut) => {
  * The booking and its QR pass are then written together in one transaction
  * (Atlas). If that step fails for any reason, the beds are handed back.
  */
-const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut } = {}) => {
+/** Nights between two YYYY-MM-DD dates (a same-day stay counts as one night). */
+const nightsBetween = (checkIn, checkOut) =>
+    Math.max(1, Math.round((istDateTime(checkOut, '12:00') - istDateTime(checkIn, '12:00')) / 86400000));
+
+/**
+ * Price check for the cart: validates the request exactly like a booking would,
+ * without writing anything. Price is always computed here, never sent by the browser.
+ */
+const quote = async (lodgingId, { beds, checkIn, checkOut } = {}) => {
+    const count = Number(beds);
+    if (!Number.isInteger(count) || count < 1 || count > MAX_BEDS_PER_USER) {
+        throw badRequest(`You can book between 1 and ${MAX_BEDS_PER_USER} beds`);
+    }
+    if (!mongoose.isValidObjectId(lodgingId)) throw badRequest('Invalid camp');
+    const lodging = await Lodging.findById(lodgingId).populate('providerId', 'name verificationStatus').lean();
+    if (!lodging || !lodging.isActive) throw notFound('Camp not found');
+    if (lodging.providerId?.verificationStatus !== 'VERIFIED') throw forbidden('This camp is not verified yet');
+    if (lodging.availableBeds < count) throw conflict(lodging.availableBeds === 0 ? 'Sold out - no beds left at this camp' : `Only ${lodging.availableBeds} bed(s) left`);
+    const event = await Event.findById(lodging.eventId).lean();
+    const stay = parseStay(event, checkIn, checkOut);
+    const nights = nightsBetween(stay.checkIn, stay.checkOut);
+    const unitPrice = lodging.pricePerNight || 0;
+    return {
+        lodging,
+        label: lodging.name,
+        detail: `${count} bed${count > 1 ? 's' : ''} x ${nights} night${nights > 1 ? 's' : ''} x ₹${unitPrice} - ${stay.checkIn === stay.checkOut ? stay.checkIn : `${stay.checkIn} to ${stay.checkOut}`}`,
+        amount: unitPrice * count * nights,
+        stay,
+    };
+};
+
+const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut } = {}, { paidByOrder = null } = {}) => {
     const count = Number(beds);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BEDS_PER_USER) {
         throw badRequest(`You can book between 1 and ${MAX_BEDS_PER_USER} beds`);
@@ -67,6 +98,10 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
     if (!lodging || !lodging.isActive) throw notFound('Camp not found');
     if (!lodging.providerId || lodging.providerId.verificationStatus !== 'VERIFIED') {
         throw forbidden('This camp is not verified yet');
+    }
+    // Paid camps are booked through the cart and checkout (simulated payment)
+    if ((lodging.pricePerNight || 0) > 0 && !paidByOrder) {
+        throw new HttpError(402, `This camp costs ₹${lodging.pricePerNight} per bed per night. Add it to your cart and pay at checkout.`);
     }
     const event = await Event.findById(lodging.eventId).lean();
     const stay = parseStay(event, checkIn, checkOut);
@@ -130,6 +165,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
                         checkIn: stay.checkIn,
                         checkOut: stay.checkOut,
                         provider: lodging.providerId.name,
+                        ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
                     },
                     validFrom: istDateTime(stay.checkIn, '00:00'),
                     validUntil: istDateTime(stay.checkOut, '23:59'),
@@ -172,4 +208,4 @@ const cancel = async (bookingId, user) => {
 const mine = async (userId) =>
     LodgingBooking.find({ userId }).populate('lodgingId', 'name sector category').sort({ createdAt: -1 }).lean();
 
-module.exports = { search, book, cancel, mine, MAX_BEDS_PER_USER };
+module.exports = { search, quote, book, cancel, mine, MAX_BEDS_PER_USER };

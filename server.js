@@ -56,6 +56,7 @@ app.use('/api/sos', require('./modules/sos/sos.routes'));
 app.use('/api/lost-found', require('./modules/lostfound/lostfound.routes'));
 app.use('/api/ngo', require('./modules/ngo/ngo.routes'));
 app.use('/api/admin', require('./modules/admin/admin.routes'));
+app.use('/api/orders', require('./modules/order/order.routes'));
 
 app.use(notFoundHandler);
 app.use(errorHandler);

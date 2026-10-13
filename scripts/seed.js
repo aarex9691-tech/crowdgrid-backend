@@ -25,6 +25,7 @@ const { VolunteerApplication } = require('../modules/volunteer/volunteer.model')
 const SosIncident = require('../modules/sos/sos.model');
 const LostFoundReport = require('../modules/lostfound/lostfound.model');
 const AuditLog = require('../modules/audit/audit.model');
+const Order = require('../modules/order/order.model');
 const passToken = require('../utils/passToken');
 const { istDate, istDateTime, addDays } = require('../utils/time');
 
@@ -45,7 +46,7 @@ async function main() {
     await mongoose.connect(process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog, Order];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
