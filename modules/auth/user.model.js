@@ -25,6 +25,8 @@ const userSchema = new mongoose.Schema(
         lockUntil: { type: Date },
         // Bumped by "log out of all devices": tokens carrying an older version stop working
         tokenVersion: { type: Number, default: 0 },
+        // Personal "one QR for everything" (see utils/passToken.js); reset to revoke old copies
+        qrNonce: { type: String, select: false },
     },
     { timestamps: true }
 );

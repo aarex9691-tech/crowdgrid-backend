@@ -2,6 +2,7 @@ const { Pass } = require('./pass.model');
 const passToken = require('../../utils/passToken');
 const { ROLES } = require('../../config/roles');
 const { badRequest } = require('../../utils/httpError');
+const User = require('../auth/user.model');
 const audit = require('../audit/audit.service');
 
 /** Creates a pass (inside the caller's transaction when `session` is given). */
@@ -51,8 +52,9 @@ const maskPhone = (phone) => (phone ? `${'*'.repeat(6)}${String(phone).slice(-4)
  *     update can match, the other gets "already used".
  */
 /** Scan with an audit trail of every accepted and rejected pass. */
-const scan = async (qr, scanner) => {
-    const result = await scanPass(qr, scanner);
+const scan = async (qr, scanner, opts = {}) => {
+    const result = await scanPass(qr, scanner, opts);
+    if (result.result === 'CHOOSE') return result; // nothing decided yet
     audit.record({
         actor: scanner,
         action: result.result === 'VALID' ? 'PASS_ACCEPTED' : 'PASS_REJECTED',
@@ -64,16 +66,21 @@ const scan = async (qr, scanner) => {
     return result;
 };
 
-const scanPass = async (qr, scanner) => {
+const scanPass = async (qr, scanner, opts = {}) => {
+    if (passToken.isUserQr(qr)) return scanPersonal(qr, scanner, opts);
     const decoded = passToken.decode(qr);
     if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
 
-    const now = new Date();
     const pass = await Pass.findById(decoded.passId).populate('userId', 'name countryCode phone').lean();
     if (!pass || pass.nonce !== decoded.nonce) {
         return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'Pass not found' };
     }
+    return redeem(pass, scanner);
+};
 
+/** Checks scope and validity, then redeems the pass atomically (single use). */
+const redeem = async (pass, scanner) => {
+    const now = new Date();
     // NGO admins may only redeem passes for their own camps / kitchens
     if (scanner.role === ROLES.NGO_ADMIN && pass.providerId && String(pass.providerId) !== String(scanner.providerId)) {
         return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
@@ -109,6 +116,67 @@ const scanPass = async (qr, scanner) => {
     return { result: 'VALID', message: 'VALID - CHECKED IN', pass: summary(redeemed) };
 };
 
+/** Which pass types each scanning point accepts. */
+const SERVICE_TYPES = {
+    ANY: null,
+    FOOD: ['MEAL'],
+    LODGING: ['LODGING'],
+    TRANSIT: ['TRANSIT'],
+    ENTRY: ['PUBLIC', 'CORPORATE'],
+    VOLUNTEER: ['VOLUNTEER'],
+};
+
+/**
+ * One QR per person. The scanner says where it is (food counter, camp gate,
+ * bus gate, event entry); the server finds that person's passes that are valid
+ * here and now, and redeems the matching one. Each pass is still single use.
+ * When two passes match (e.g. two camps), the volunteer picks one.
+ */
+const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
+    const decoded = passToken.decodeUser(qr);
+    if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
+    const holder = await User.findById(decoded.userId).select('+qrNonce name countryCode phone isActive').lean();
+    if (!holder || !holder.isActive || holder.qrNonce !== decoded.nonce) {
+        return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR was reset or is no longer valid. Ask for the new one.' };
+    }
+    const person = { name: holder.name, phone: maskPhone(holder.phone) };
+
+    const now = new Date();
+    const filter = { userId: holder._id, status: 'ACTIVE', validFrom: { $lte: now }, validUntil: { $gte: now } };
+    const types = SERVICE_TYPES[String(service).toUpperCase()] ?? null;
+    if (types) filter.type = { $in: types };
+    if (scanner.role === ROLES.CORPORATE_ADMIN) filter.type = { $in: ['CORPORATE'] };
+    // NGO admins only redeem passes for their own camps / kitchens (or passes with no provider)
+    if (scanner.role === ROLES.NGO_ADMIN) {
+        filter.$or = [{ providerId: scanner.providerId || null }, { providerId: null }, { providerId: { $exists: false } }];
+    }
+    let candidates = await Pass.find(filter).sort({ validUntil: 1 }).populate('userId', 'name countryCode phone').lean();
+
+    if (passId) {
+        candidates = candidates.filter((p) => String(p._id) === String(passId));
+        if (!candidates.length) return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'That pass is no longer valid', holder: person };
+    }
+    if (!candidates.length) {
+        return { result: 'REJECTED', reason: 'NO_VALID_PASS', message: 'No valid pass for this counter right now', holder: person };
+    }
+    if (candidates.length > 1) {
+        return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary) };
+    }
+    return redeem(candidates[0], scanner);
+};
+
+/** The person's own QR (created on first use). reset=true issues a new one and kills old copies. */
+const myQr = async (user, { reset = false } = {}) => {
+    let doc = await User.findById(user._id).select('+qrNonce').lean();
+    if (!doc.qrNonce || reset) {
+        const nonce = passToken.newNonce();
+        await User.updateOne({ _id: user._id }, { $set: { qrNonce: nonce } });
+        doc = { ...doc, qrNonce: nonce };
+        if (reset) audit.record({ actor: user, action: 'PERSONAL_QR_RESET', targetType: 'User', targetId: user._id, summary: `${user.name} reset their personal QR` });
+    }
+    return { qr: passToken.encodeUser(String(user._id), doc.qrNonce) };
+};
+
 const fmt = (d) =>
     new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -123,4 +191,4 @@ const requireQr = (qr) => {
     return qr.trim();
 };
 
-module.exports = { issuePass, toClient, listMine, scan, cancelPass, requireQr };
+module.exports = { issuePass, toClient, listMine, scan, cancelPass, requireQr, myQr, SERVICE_TYPES };

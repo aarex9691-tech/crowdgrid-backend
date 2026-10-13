@@ -38,4 +38,27 @@ const decode = (payload) => {
     return { passId, nonce };
 };
 
-module.exports = { encode, decode, newNonce };
+/**
+ * Personal QR (one per person, opens all their passes):
+ *   CGU.<userId>.<nonce>.<signature>
+ * signed over "U.<userId>.<nonce>" so a pass signature can never be reused as a
+ * personal one. The nonce lives on the user; resetting it kills old screenshots.
+ */
+const USER_PREFIX = 'CGU';
+const encodeUser = (userId, nonce) => `${USER_PREFIX}.${userId}.${nonce}.${sign(`U.${userId}`, nonce)}`;
+
+const decodeUser = (payload) => {
+    if (typeof payload !== 'string') return null;
+    const parts = payload.trim().split('.');
+    if (parts.length !== 4 || parts[0] !== USER_PREFIX) return null;
+    const [, userId, nonce, signature] = parts;
+    if (!/^[a-f0-9]{24}$/i.test(userId)) return null;
+    const expected = Buffer.from(sign(`U.${userId}`, nonce));
+    const given = Buffer.from(signature);
+    if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
+    return { userId, nonce };
+};
+
+const isUserQr = (payload) => typeof payload === 'string' && payload.trim().startsWith(`${USER_PREFIX}.`);
+
+module.exports = { encode, decode, newNonce, encodeUser, decodeUser, isUserQr };
