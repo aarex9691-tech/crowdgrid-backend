@@ -4,6 +4,7 @@ const Provider = require('../provider/provider.model');
 const Event = require('../event/event.model');
 const { issuePass, toClient, cancelPass } = require('../pass/pass.service');
 const { withTransaction } = require('../../utils/tx');
+const bedAlloc = require('./beds');
 const audit = require('../audit/audit.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
@@ -92,11 +93,22 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
         throw conflict(left === 0 ? 'Sold out - no beds left at this camp' : `Only ${left} bed(s) left`, { availableBeds: left });
     }
 
-    // 2. Write booking + pass together; give the beds back if this fails
+    // 2. Number the beds (tent + bed). A unique index stops two bookings taking the same bed.
+    const bookingId = new mongoose.Types.ObjectId();
+    let bedNos;
+    try {
+        bedNos = await bedAlloc.allocate(lodging, bookingId, count);
+    } catch (err) {
+        await Lodging.updateOne({ _id: lodging._id }, { $inc: { availableBeds: count } });
+        throw err;
+    }
+    const where = bedAlloc.describe(lodging, bedNos);
+
+    // 3. Write booking + pass together; give the beds back if this fails
     try {
         return await withTransaction(async (session) => {
             const [booking] = await LodgingBooking.create(
-                [{ lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, ...stay }],
+                [{ _id: bookingId, lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, bedNos, bedLabel: where.text, ...stay }],
                 { session }
             );
             const pass = await issuePass(
@@ -107,9 +119,12 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
                     providerId: lodging.providerId._id,
                     refId: booking._id,
                     title: lodging.name,
-                    subtitle: `${lodging.sector} - ${count} bed${count > 1 ? 's' : ''}`,
+                    subtitle: `${where.text} - ${lodging.sector}`,
                     details: {
                         sector: lodging.sector,
+                        tent: where.parts.map((p) => p.unit).join(' + '),
+                        bedNumbers: where.parts.flatMap((p) => p.beds),
+                        location: where.text,
                         beds: count,
                         guests: names,
                         checkIn: stay.checkIn,
@@ -124,13 +139,14 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
             booking.passId = pass._id;
             await booking.save({ session });
             return {
-                message: 'Booking confirmed',
+                message: `Booking confirmed: ${where.text}`,
                 booking: booking.toObject(),
                 availableBeds: updated.availableBeds,
                 pass: toClient(pass),
             };
         });
     } catch (err) {
+        await bedAlloc.release(bookingId);
         await Lodging.updateOne({ _id: lodging._id }, { $inc: { availableBeds: count } });
         throw err;
     }
@@ -146,6 +162,7 @@ const cancel = async (bookingId, user) => {
         );
         if (!booking) throw notFound('Active booking not found');
         await Lodging.updateOne({ _id: booking.lodgingId }, { $inc: { availableBeds: booking.beds } }, { session });
+        await bedAlloc.release(booking._id, session);
         await cancelPass(booking.passId, session);
         audit.record({ actor: user, action: 'BOOKING_CANCELLED', targetType: 'LodgingBooking', targetId: booking._id, summary: `${user.name} cancelled a ${booking.beds}-bed booking` });
         return { message: 'Booking cancelled', booking: booking.toObject() };

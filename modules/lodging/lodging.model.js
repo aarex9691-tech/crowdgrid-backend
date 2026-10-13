@@ -14,6 +14,8 @@ const lodgingSchema = new mongoose.Schema(
         location: { lat: Number, lng: Number },
         pricePerNight: { type: Number, default: 0, min: 0 },
         totalBeds: { type: Number, required: true, min: 0 },
+        // Beds per tent / room / hall (default by category, see beds.js)
+        bedsPerUnit: { type: Number, min: 1, max: 500 },
         // Live inventory. Only ever changed with atomic $inc (see lodging.service.js)
         availableBeds: { type: Number, required: true, min: 0 },
         isActive: { type: Boolean, default: true },
@@ -34,6 +36,9 @@ const bookingSchema = new mongoose.Schema(
         checkOut: { type: String, required: true },
         status: { type: String, enum: ['CONFIRMED', 'CANCELLED'], default: 'CONFIRMED' },
         passId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pass' },
+        // Allocated bed numbers (1..totalBeds) and their label, e.g. "Tent T-4 · Beds 7, 8"
+        bedNos: [Number],
+        bedLabel: String,
     },
     { timestamps: true }
 );

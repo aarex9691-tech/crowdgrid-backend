@@ -1,3 +1,4 @@
+const { BedAssignment } = require('../lodging/beds');
 const mongoose = require('mongoose');
 const Provider = require('../provider/provider.model');
 const { Lodging, LodgingBooking, CATEGORIES } = require('../lodging/lodging.model');
@@ -78,7 +79,14 @@ const adjustBeds = async (user, lodgingId, change) => {
     const provider = await resolveProvider(user, lodging.providerId);
     if (String(provider._id) !== String(lodging.providerId)) throw forbidden('Not your camp');
     const filter = { _id: lodging._id };
-    if (delta < 0) filter.availableBeds = { $gte: -delta };
+    if (delta < 0) {
+        filter.availableBeds = { $gte: -delta };
+        // The beds removed are the highest-numbered ones; they must not be allocated
+        const newTotal = lodging.totalBeds + delta;
+        if (await BedAssignment.exists({ lodgingId: lodging._id, bedNo: { $gt: newTotal } })) {
+            throw badRequest(`Beds above number ${newTotal} are occupied, so they cannot be removed yet`);
+        }
+    }
     const updated = await Lodging.findOneAndUpdate(filter, { $inc: { totalBeds: delta, availableBeds: delta } }, { returnDocument: 'after' }).lean();
     if (!updated) throw badRequest('Cannot remove beds that are already booked');
     audit.record({ actor: user, action: 'BEDS_ADJUSTED', targetType: 'Lodging', targetId: lodging._id, summary: `${user.name} ${delta > 0 ? 'added' : 'removed'} ${Math.abs(delta)} beds at "${lodging.name}"` });

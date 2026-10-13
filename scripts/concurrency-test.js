@@ -14,6 +14,7 @@ const User = require('../modules/auth/user.model');
 const Event = require('../modules/event/event.model');
 const Provider = require('../modules/provider/provider.model');
 const { Lodging, LodgingBooking } = require('../modules/lodging/lodging.model');
+const { BedAssignment } = require('../modules/lodging/beds');
 const { FoodCenter, FoodSlot } = require('../modules/food/food.model');
 const { Pass } = require('../modules/pass/pass.model');
 const lodgingService = require('../modules/lodging/lodging.service');
@@ -64,7 +65,10 @@ async function main() {
         if (other.length) console.log(`  other errors        : ${other.length} (first: ${other[0].reason.message})`);
         console.log(`  beds left in DB     : ${after.availableBeds}`);
         console.log(`  bookings in DB      : ${bookings}`);
-        const pass1 = ok === BEDS && after.availableBeds === 0 && bookings === BEDS && other.length === 0;
+        const assigned = await BedAssignment.find({ lodgingId: lodging._id }).lean();
+        const distinctBeds = new Set(assigned.map((a) => a.bedNo)).size;
+        console.log(`  bed numbers given   : ${assigned.length} (${distinctBeds} different)`);
+        const pass1 = ok === BEDS && after.availableBeds === 0 && bookings === BEDS && other.length === 0 && assigned.length === BEDS && distinctBeds === BEDS;
         console.log(pass1 ? '  PASS - no double booking\n' : '  FAIL\n');
 
         // ---- Test 2: one pilgrim, 20 simultaneous lunch claims ----
@@ -88,6 +92,7 @@ async function main() {
         const ids = pilgrims.map((p) => p._id);
         await Promise.all([
             Pass.deleteMany({ eventId: event._id }),
+            BedAssignment.deleteMany({ lodgingId: lodging._id }),
             LodgingBooking.deleteMany({ eventId: event._id }),
             FoodSlot.deleteMany({ eventId: event._id }),
             FoodCenter.deleteMany({ eventId: event._id }),

@@ -17,6 +17,7 @@ const User = require('../modules/auth/user.model');
 const Event = require('../modules/event/event.model');
 const Provider = require('../modules/provider/provider.model');
 const { Lodging, LodgingBooking } = require('../modules/lodging/lodging.model');
+const { BedAssignment } = require('../modules/lodging/beds');
 const { FoodCenter, FoodSlot, MEALS } = require('../modules/food/food.model');
 const { Pass } = require('../modules/pass/pass.model');
 const TransitRoute = require('../modules/transit/transit.model');
@@ -44,7 +45,7 @@ async function main() {
     await mongoose.connect(process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
@@ -207,6 +208,12 @@ async function main() {
         L(nmc, 'Kushavarta Pilgrim Shelter', SECTORS.TRIMBAK, 'DHARAMSHALA', 200, 37, 0.2, ['Drinking Water', 'Western Toilets'], 19.9322, 73.5309, 50),
         L(nmc, 'Trimbak Family Tents', SECTORS.TRIMBAK, 'FAMILY_TENT', 300, 141, 1.1, ['Drinking Water', 'Bio-Toilets', 'Charging Point'], 19.9365, 73.5274),
     ]);
+
+    // Beds already taken by walk-in pilgrims get numbers too (bookingId null),
+    // so new online bookings receive the next free tent / bed numbers.
+    await BedAssignment.insertMany(
+        lodgings.flatMap((l) => Array.from({ length: l.totalBeds - l.availableBeds }, (_, i) => ({ lodgingId: l._id, bedNo: i + 1, bookingId: null })))
+    );
 
     // ---------- Food ----------
     const centers = await FoodCenter.insertMany([
