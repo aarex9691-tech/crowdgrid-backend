@@ -135,7 +135,7 @@ const SERVICE_TYPES = {
 const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     const decoded = passToken.decodeUser(qr);
     if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
-    const holder = await User.findById(decoded.userId).select('+qrNonce name countryCode phone isActive').lean();
+    const holder = await User.findById(decoded.userId).select('name countryCode phone isActive qrNonce').lean();
     if (!holder || !holder.isActive || holder.qrNonce !== decoded.nonce) {
         return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR was reset or is no longer valid. Ask for the new one.' };
     }

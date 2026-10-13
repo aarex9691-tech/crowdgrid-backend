@@ -16,6 +16,13 @@ const signToken = (user) =>
 
 const { phoneError, parseLoginPhone, digits, DEFAULT_CC } = require('../../utils/phone');
 
+/**
+ * Query for one mobile number. Accounts created before country codes existed
+ * have no countryCode field; they are Indian (+91) numbers.
+ */
+const phoneQuery = ({ countryCode, phone }) =>
+    countryCode === DEFAULT_CC ? { phone, $or: [{ countryCode: DEFAULT_CC }, { countryCode: { $exists: false } }] } : { countryCode, phone };
+
 /** Validates a mobile number for its country; never trims extra digits silently. */
 const cleanPhoneOrThrow = (countryCode, phone) => {
     const cc = digits(countryCode) || DEFAULT_CC;
@@ -41,7 +48,7 @@ const validatePassword = (password) => {
 const register = async ({ name, phone, countryCode, email, password }) => {
     validatePassword(password);
     const mobile = cleanPhoneOrThrow(countryCode, phone);
-    if (await User.exists(mobile)) throw conflict('An account with this mobile number already exists');
+    if (await User.exists(phoneQuery(mobile))) throw conflict('An account with this mobile number already exists');
     if (email && (await User.exists({ email: String(email).toLowerCase() }))) {
         throw conflict('An account with this email already exists');
     }
@@ -61,7 +68,7 @@ const login = async ({ phone, email, identifier, countryCode, password }) => {
     const id = String(identifier || phone || email || '').trim();
     if (!id || !password) throw badRequest('Mobile number and password are required');
 
-    const query = id.includes('@') ? { email: id.toLowerCase() } : parseLoginPhone(id, countryCode);
+    const query = id.includes('@') ? { email: id.toLowerCase() } : phoneQuery(parseLoginPhone(id, countryCode));
     const user = await User.findOne(query).select('+passwordHash');
 
     // Account lockout: refuse while locked, even if the password is right
@@ -123,7 +130,7 @@ const createStaff = async ({ name, phone, countryCode, email, password, role, pr
     if (!allowed.includes(role)) throw badRequest(`Role must be one of ${allowed.join(', ')}`);
     validatePassword(password);
     const mobile = cleanPhoneOrThrow(countryCode, phone);
-    if (await User.exists(mobile)) throw conflict('An account with this mobile number already exists');
+    if (await User.exists(phoneQuery(mobile))) throw conflict('An account with this mobile number already exists');
     const user = await User.create({
         name,
         ...mobile,
