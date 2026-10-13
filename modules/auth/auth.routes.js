@@ -15,8 +15,8 @@ const authLimiter = rateLimit({
 });
 
 router.post('/register', authLimiter, async (req, res) => {
-    const { name, phone, email, password } = req.body || {};
-    res.status(201).json(await auth.register({ name, phone, email, password }));
+    const { name, phone, countryCode, email, password } = req.body || {};
+    res.status(201).json(await auth.register({ name, phone, countryCode, email, password }));
 });
 
 router.post('/login', authLimiter, async (req, res) => {

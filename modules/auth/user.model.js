@@ -4,12 +4,14 @@ const { ROLES } = require('../../config/roles');
 const userSchema = new mongoose.Schema(
     {
         name: { type: String, required: [true, 'Name is required'], trim: true, maxlength: 80 },
+        // Country code (digits, "91" for India) + national number (digits).
+        // Per-country length rules live in utils/phone.js.
+        countryCode: { type: String, default: '91', match: [/^\d{1,4}$/, 'Invalid country code'] },
         phone: {
             type: String,
             required: [true, 'Mobile number is required'],
-            unique: true,
             trim: true,
-            match: [/^[6-9]\d{9}$/, 'Enter a valid 10-digit Indian mobile number'],
+            match: [/^\d{6,14}$/, 'Enter a valid mobile number'],
         },
         email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
         passwordHash: { type: String, required: true, select: false },
@@ -27,10 +29,14 @@ const userSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
+// One account per mobile number (the same national number may exist in two countries)
+userSchema.index({ countryCode: 1, phone: 1 }, { unique: true });
+
 userSchema.methods.toPublic = function toPublic() {
     return {
         _id: this._id,
         name: this.name,
+        countryCode: this.countryCode || '91',
         phone: this.phone,
         email: this.email,
         role: this.role,

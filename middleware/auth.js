@@ -28,6 +28,7 @@ const loadUser = async (token) => {
         _id: user._id,
         id: String(user._id),
         name: user.name,
+        countryCode: user.countryCode || '91',
         phone: user.phone,
         role: user.role,
         providerId: user.providerId || null,

@@ -51,8 +51,8 @@ const list = async (viewer, { status, eventId } = {}) => {
     if (eventId && mongoose.isValidObjectId(eventId)) filter.eventId = eventId;
     if (viewer.role === ROLES.VOLUNTEER) filter.assignedTo = viewer._id;
     return SosIncident.find(filter)
-        .populate('userId', 'name phone')
-        .populate('assignedTo', 'name phone')
+        .populate('userId', 'name countryCode phone')
+        .populate('assignedTo', 'name countryCode phone')
         .sort({ status: 1, createdAt: -1 })
         .limit(200)
         .lean();

@@ -14,7 +14,16 @@ const signToken = (user) =>
         expiresIn: '7d',
     });
 
-const normalisePhone = (phone) => String(phone || '').replace(/\D/g, '').slice(-10);
+const { phoneError, parseLoginPhone, digits, DEFAULT_CC } = require('../../utils/phone');
+
+/** Validates a mobile number for its country; never trims extra digits silently. */
+const cleanPhoneOrThrow = (countryCode, phone) => {
+    const cc = digits(countryCode) || DEFAULT_CC;
+    const n = digits(phone);
+    const err = phoneError(cc, n);
+    if (err) throw badRequest(err);
+    return { countryCode: cc, phone: n };
+};
 
 /** New passwords: at least 8 characters with at least one letter and one number. */
 const validatePassword = (password) => {
@@ -29,17 +38,17 @@ const validatePassword = (password) => {
  * sent by the client is ignored. Higher roles are granted only through
  * approval flows or by the Super Admin (principle of least privilege).
  */
-const register = async ({ name, phone, email, password }) => {
+const register = async ({ name, phone, countryCode, email, password }) => {
     validatePassword(password);
-    const cleanPhone = normalisePhone(phone);
-    if (await User.exists({ phone: cleanPhone })) throw conflict('An account with this mobile number already exists');
+    const mobile = cleanPhoneOrThrow(countryCode, phone);
+    if (await User.exists(mobile)) throw conflict('An account with this mobile number already exists');
     if (email && (await User.exists({ email: String(email).toLowerCase() }))) {
         throw conflict('An account with this email already exists');
     }
 
     const user = await User.create({
         name,
-        phone: cleanPhone,
+        ...mobile,
         email: email || undefined,
         passwordHash: await bcrypt.hash(password, SALT_ROUNDS),
         role: ROLES.USER,
@@ -48,11 +57,11 @@ const register = async ({ name, phone, email, password }) => {
 };
 
 /** Log in with mobile number (or email) and password. */
-const login = async ({ phone, email, identifier, password }) => {
+const login = async ({ phone, email, identifier, countryCode, password }) => {
     const id = String(identifier || phone || email || '').trim();
     if (!id || !password) throw badRequest('Mobile number and password are required');
 
-    const query = id.includes('@') ? { email: id.toLowerCase() } : { phone: normalisePhone(id) };
+    const query = id.includes('@') ? { email: id.toLowerCase() } : parseLoginPhone(id, countryCode);
     const user = await User.findOne(query).select('+passwordHash');
 
     // Account lockout: refuse while locked, even if the password is right
@@ -109,15 +118,15 @@ const logoutAll = async (user) => {
 };
 
 /** Super Admin creates staff accounts (Authority, Corporate Admin, Volunteer, Super Admin). */
-const createStaff = async ({ name, phone, email, password, role, providerId }, actor) => {
+const createStaff = async ({ name, phone, countryCode, email, password, role, providerId }, actor) => {
     const allowed = [ROLES.SUPER_ADMIN, ROLES.AUTHORITY, ROLES.CORPORATE_ADMIN, ROLES.VOLUNTEER, ROLES.NGO_ADMIN];
     if (!allowed.includes(role)) throw badRequest(`Role must be one of ${allowed.join(', ')}`);
     validatePassword(password);
-    const cleanPhone = normalisePhone(phone);
-    if (await User.exists({ phone: cleanPhone })) throw conflict('An account with this mobile number already exists');
+    const mobile = cleanPhoneOrThrow(countryCode, phone);
+    if (await User.exists(mobile)) throw conflict('An account with this mobile number already exists');
     const user = await User.create({
         name,
-        phone: cleanPhone,
+        ...mobile,
         email: email || undefined,
         passwordHash: await bcrypt.hash(password, SALT_ROUNDS),
         role,

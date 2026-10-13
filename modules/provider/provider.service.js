@@ -35,7 +35,7 @@ const list = async ({ status, eventId } = {}) => {
     if (status) filter.verificationStatus = String(status);
     if (eventId && mongoose.isValidObjectId(eventId)) filter.eventId = eventId;
     return Provider.find(filter)
-        .populate('adminUserId', 'name phone')
+        .populate('adminUserId', 'name countryCode phone')
         .populate('eventId', 'title')
         .sort({ createdAt: -1 })
         .lean();

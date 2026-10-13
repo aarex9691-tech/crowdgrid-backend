@@ -52,7 +52,7 @@ const listForReview = async (reviewer, { status, eventId } = {}) => {
         filter.providerId = reviewer.providerId;
     }
     return VolunteerApplication.find(filter)
-        .populate('userId', 'name phone')
+        .populate('userId', 'name countryCode phone')
         .populate('eventId', 'title')
         .populate('providerId', 'name')
         .sort({ createdAt: -1 })

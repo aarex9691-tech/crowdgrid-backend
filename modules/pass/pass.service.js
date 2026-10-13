@@ -69,7 +69,7 @@ const scanPass = async (qr, scanner) => {
     if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
 
     const now = new Date();
-    const pass = await Pass.findById(decoded.passId).populate('userId', 'name phone').lean();
+    const pass = await Pass.findById(decoded.passId).populate('userId', 'name countryCode phone').lean();
     if (!pass || pass.nonce !== decoded.nonce) {
         return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'Pass not found' };
     }
@@ -94,7 +94,7 @@ const scanPass = async (qr, scanner) => {
         { $set: { status: 'REDEEMED', redeemedAt: now, redeemedBy: scanner._id } },
         { returnDocument: 'after' }
     )
-        .populate('userId', 'name phone')
+        .populate('userId', 'name countryCode phone')
         .lean();
 
     if (!redeemed) {

@@ -142,13 +142,13 @@ const corporateAttendees = async (eventId, user) => {
     assertCanManageKind(user, event.kind);
     assertOwnerOrAdmin(event, user);
     const passes = await Pass.find({ eventId: event._id, type: 'CORPORATE', status: { $ne: 'CANCELLED' } })
-        .populate('userId', 'name phone')
+        .populate('userId', 'name countryCode phone')
         .sort({ createdAt: -1 })
         .lean();
     return passes.map((p) => ({
         _id: p._id,
         name: p.userId?.name,
-        phone: p.userId?.phone,
+        phone: p.userId?.phone && `+${p.userId.countryCode || '91'} ${p.userId.phone}`,
         sessions: p.details?.sessions || [],
         claimedAt: p.createdAt,
         checkedIn: p.status === 'REDEEMED',
