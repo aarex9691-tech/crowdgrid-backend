@@ -43,6 +43,33 @@ npm run test:concurrency
 
 200 pilgrims race for 10 beds at the same instant, then one pilgrim fires 20 simultaneous lunch claims. Expected: exactly 10 bookings with 0 beds left, and exactly 1 meal token. The script cleans up after itself.
 
+## Check the new features
+
+After `npm run seed`, run:
+
+```bash
+npm run test:flows
+```
+
+It checks phone validation, tent and bed numbers, the cart with simulated
+payment, family meal tokens and the personal QR against your database, then
+deletes everything it created.
+
+**Simulated payment (demo, no real money):** UPI `anything@okaxis` is approved,
+`fail@upi` is declined. Card `4242 4242 4242 4242` is approved,
+`4000 0000 0000 0002` is declined (any future expiry, any 3-digit CVV).
+Paid camps and bus passes must go through `/api/orders`; booking them
+directly returns `402 Payment Required`.
+
+| New endpoint | Purpose |
+| --- | --- |
+| `POST /api/orders` | Create an order from cart items (server prices them) |
+| `POST /api/orders/:id/pay` | Pay with `{ method: 'UPI', upiId }` or `{ method: 'CARD', cardNumber, expiry, cvv }` |
+| `GET /api/orders/mine`, `GET /api/orders/:id` | Order history and receipt |
+| `GET /api/passes/my-qr`, `POST /api/passes/my-qr/reset` | One personal QR for all passes; reset revokes old copies |
+| `POST /api/passes/scan` | Now also takes `service` (`FOOD`, `LODGING`, `TRANSIT`, `ENTRY`, `VOLUNTEER`) and `passId` for personal QRs |
+| `POST /api/food/slots/:id/claim` | Now takes `{ people: 1-6, names }` for a family token |
+
 ## Architecture
 
 ```
