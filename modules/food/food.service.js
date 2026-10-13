@@ -6,6 +6,9 @@ const { issuePass, toClient } = require('../pass/pass.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
 
+/** One token can feed a family: up to this many people per account per meal. */
+const MAX_PEOPLE_PER_TOKEN = 6;
+
 /** Kitchens with their meal slots for one day (default: today, IST). */
 const listCenters = async (eventId, { sector, date } = {}) => {
     if (!mongoose.isValidObjectId(eventId)) throw badRequest('Invalid event id');
@@ -41,13 +44,22 @@ const windowFor = (slot) => {
 };
 
 /**
- * 1-tap meal token.
- *  - quota: atomic decrement of `remaining`, only while remaining > 0
+ * Meal token for one person or a family group (1-6 people, one QR).
+ *  - quota: atomic decrement of `remaining` by the group size, only while
+ *    at least that many plates are left
  *  - anti-hoarding: dedupeKey MEAL:<event>:<date>:<meal>:<user> is a UNIQUE
  *    index, so MongoDB rejects a second lunch token for the same person on the
  *    same day, at any kitchen, even if both requests arrive simultaneously.
  */
-const claim = async (slotId, user) => {
+const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
+    const count = Number(people);
+    if (!Number.isInteger(count) || count < 1 || count > MAX_PEOPLE_PER_TOKEN) {
+        throw badRequest(`One token can cover 1 to ${MAX_PEOPLE_PER_TOKEN} people`);
+    }
+    const guests = (Array.isArray(names) ? names : String(names || '').split(','))
+        .map((n) => String(n).trim().slice(0, 60))
+        .filter(Boolean)
+        .slice(0, count);
     const slot = await FoodSlot.findById(slotId).lean();
     if (!slot) throw notFound('Meal slot not found');
     const center = await FoodCenter.findById(slot.foodCenterId).lean();
@@ -61,13 +73,21 @@ const claim = async (slotId, user) => {
         throw conflict(`You already have a ${MEALS[slot.meal].label.toLowerCase()} token for ${slot.date} (limit 1 per meal)`);
     }
 
-    // Claim one token from the quota atomically, outside any transaction
+    // Claim the plates from the quota atomically, outside any transaction
     const updated = await FoodSlot.findOneAndUpdate(
-        { _id: slot._id, remaining: { $gt: 0 } },
-        { $inc: { remaining: -1 } },
+        { _id: slot._id, remaining: { $gte: count } },
+        { $inc: { remaining: -count } },
         { returnDocument: 'after' }
     );
-    if (!updated) throw conflict('All tokens for this meal are taken. Try another kitchen.', { remaining: 0 });
+    if (!updated) {
+        const fresh = await FoodSlot.findById(slot._id, 'remaining').lean();
+        const left = fresh ? fresh.remaining : 0;
+        throw conflict(
+            left === 0 ? 'All tokens for this meal are taken. Try another kitchen.' : `Only ${left} plate${left > 1 ? 's' : ''} left at this kitchen for this meal`,
+            { remaining: left }
+        );
+    }
+    const menu = slot.menu?.length ? slot.menu : center.menu || [];
     try {
         const pass = await issuePass(
             {
@@ -76,9 +96,9 @@ const claim = async (slotId, user) => {
                 eventId: slot.eventId,
                 providerId: center.providerId,
                 refId: slot._id,
-                title: `${MEALS[slot.meal].label} - ${center.name}`,
-                subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}`,
-                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu: center.menu },
+                title: `${MEALS[slot.meal].label}${count > 1 ? ` x ${count}` : ''} - ${center.name}`,
+                subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}${count > 1 ? ` - ${count} people` : ''}`,
+                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu, diet: center.diet, people: count, guests },
                 validFrom: from,
                 validUntil: until,
                 dedupeKey,
@@ -86,7 +106,7 @@ const claim = async (slotId, user) => {
         );
         return { message: 'Meal token issued', remaining: updated.remaining, pass: toClient(pass) };
     } catch (err) {
-        await FoodSlot.updateOne({ _id: slot._id }, { $inc: { remaining: 1 } });
+        await FoodSlot.updateOne({ _id: slot._id }, { $inc: { remaining: count } });
         if (err.code === 11000) {
             throw conflict(`You already have a ${MEALS[slot.meal].label.toLowerCase()} token for ${slot.date} (limit 1 per meal)`);
         }
@@ -94,4 +114,4 @@ const claim = async (slotId, user) => {
     }
 };
 
-module.exports = { listCenters, claim };
+module.exports = { listCenters, claim, MAX_PEOPLE_PER_TOKEN };

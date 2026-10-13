@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/slots/:id/claim', requireAuth, requirePermission('booking:create'), async (req, res) => {
-    res.status(201).json(await food.claim(req.params.id, req.user));
+    res.status(201).json(await food.claim(req.params.id, req.user, req.body || {}));
 });
 
 module.exports = router;

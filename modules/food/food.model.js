@@ -12,7 +12,8 @@ const foodCenterSchema = new mongoose.Schema(
         providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', required: true },
         name: { type: String, required: true, trim: true },
         sector: { type: String, required: true },
-        menu: [String],
+        menu: [String], // what the kitchen usually serves
+        diet: { type: String, default: 'Pure vegetarian' }, // e.g. "Satvik (no onion, no garlic)"
         location: { lat: Number, lng: Number },
         isActive: { type: Boolean, default: true },
     },
@@ -28,6 +29,7 @@ const foodSlotSchema = new mongoose.Schema(
         meal: { type: String, enum: Object.keys(MEALS), required: true },
         startTime: { type: String, required: true },
         endTime: { type: String, required: true },
+        menu: [String], // dishes served at this meal (falls back to the kitchen's menu)
         capacity: { type: Number, required: true, min: 0 },
         // Changed only with atomic $inc (see food.service.js)
         remaining: { type: Number, required: true, min: 0 },

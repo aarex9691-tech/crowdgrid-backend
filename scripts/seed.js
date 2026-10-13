@@ -210,11 +210,18 @@ async function main() {
 
     // ---------- Food ----------
     const centers = await FoodCenter.insertMany([
-        { eventId: simhastha._id, providerId: annadan._id, name: 'Godavari Langar', sector: SECTORS.RAMKUND, menu: ['Poha', 'Dal-Rice', 'Chapati-Bhaji', 'Kheer'], location: { lat: 20.0065, lng: 73.7905 } },
-        { eventId: simhastha._id, providerId: annadan._id, name: 'Tapovan Annachhatra', sector: SECTORS.TAPOVAN, menu: ['Upma', 'Khichdi', 'Puri-Bhaji'], location: { lat: 20.0105, lng: 73.806 } },
-        { eventId: simhastha._id, providerId: ramSeva._id, name: 'Ram Seva Bhojanalaya', sector: SECTORS.PANCHAVATI, menu: ['Sabudana Khichdi', 'Varan-Bhaat', 'Zunka-Bhakri'], location: { lat: 20.0077, lng: 73.7942 } },
-        { eventId: simhastha._id, providerId: nmc._id, name: 'Kushavarta Community Kitchen', sector: SECTORS.TRIMBAK, menu: ['Poha', 'Dal-Rice', 'Chapati'], location: { lat: 19.9318, lng: 73.5315 } },
+        { eventId: simhastha._id, providerId: annadan._id, name: 'Godavari Langar', sector: SECTORS.RAMKUND, menu: ['Poha', 'Dal-Rice', 'Chapati-Bhaji', 'Kheer'], diet: 'Pure vegetarian', location: { lat: 20.0065, lng: 73.7905 } },
+        { eventId: simhastha._id, providerId: annadan._id, name: 'Tapovan Annachhatra', sector: SECTORS.TAPOVAN, menu: ['Upma', 'Khichdi', 'Puri-Bhaji'], diet: 'Satvik (no onion, no garlic)', location: { lat: 20.0105, lng: 73.806 } },
+        { eventId: simhastha._id, providerId: ramSeva._id, name: 'Ram Seva Bhojanalaya', sector: SECTORS.PANCHAVATI, menu: ['Sabudana Khichdi', 'Varan-Bhaat', 'Zunka-Bhakri'], diet: 'Maharashtrian thali, pure vegetarian', location: { lat: 20.0077, lng: 73.7942 } },
+        { eventId: simhastha._id, providerId: nmc._id, name: 'Kushavarta Community Kitchen', sector: SECTORS.TRIMBAK, menu: ['Poha', 'Dal-Rice', 'Chapati'], diet: 'Pure vegetarian', location: { lat: 19.9318, lng: 73.5315 } },
     ]);
+    // What each kitchen serves at each meal (shown on the Food tab and on the token)
+    const MENUS = {
+        'Godavari Langar': { BREAKFAST: ['Poha', 'Jalebi', 'Masala chai'], LUNCH: ['Dal-Rice', 'Chapati', 'Aloo-Bhaji', 'Kheer'], DINNER: ['Khichdi', 'Kadhi', 'Papad'] },
+        'Tapovan Annachhatra': { BREAKFAST: ['Upma', 'Banana', 'Chai'], LUNCH: ['Puri-Bhaji', 'Rice', 'Moong dal'], DINNER: ['Khichdi', 'Lauki sabzi', 'Buttermilk'] },
+        'Ram Seva Bhojanalaya': { BREAKFAST: ['Sabudana Khichdi', 'Chai'], LUNCH: ['Varan-Bhaat', 'Chapati', 'Zunka', 'Shrikhand'], DINNER: ['Zunka-Bhakri', 'Thecha', 'Masale-bhaat'] },
+        'Kushavarta Community Kitchen': { BREAKFAST: ['Poha', 'Chai'], LUNCH: ['Dal-Rice', 'Chapati', 'Mix veg'], DINNER: ['Khichdi', 'Chapati', 'Dal'] },
+    };
     const slots = [];
     const capacities = { BREAKFAST: 800, LUNCH: 1200, DINNER: 1000 };
     for (let d = 0; d < 7; d++) {
@@ -226,7 +233,7 @@ async function main() {
                 let remaining = capacity;
                 if (d === 0) remaining = c.name === 'Godavari Langar' && meal === 'LUNCH' ? 340 : Math.round(capacity * 0.45);
                 if (d === 0 && c.name === 'Tapovan Annachhatra' && meal === 'DINNER') remaining = 0;
-                slots.push({ foodCenterId: c._id, eventId: simhastha._id, date, meal, startTime: MEALS[meal].start, endTime: MEALS[meal].end, capacity, remaining });
+                slots.push({ foodCenterId: c._id, eventId: simhastha._id, date, meal, startTime: MEALS[meal].start, endTime: MEALS[meal].end, capacity, remaining, menu: MENUS[c.name]?.[meal] || c.menu });
             }
         }
     }
