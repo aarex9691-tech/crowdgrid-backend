@@ -380,7 +380,8 @@ const hostedEvents = async (user) => {
     const byEvent = new Map(counts.map((c) => [String(c._id), c]));
     return events.map((e) => {
         const c = byEvent.get(String(e._id));
-        return { ...e, ticketsSold: c?.sold || 0, checkedIn: c?.checkedIn || 0, revenue: (c?.sold || 0) * (e.ticketPrice || 0) };
+        const sold = e.attendeesCount || 0; // includes tickets sold at the counter
+        return { ...e, ticketsSold: sold, onlineTickets: c?.sold || 0, checkedIn: c?.checkedIn || 0, revenue: sold * (e.ticketPrice || 0) };
     });
 };
 
