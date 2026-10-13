@@ -16,6 +16,11 @@ router.get('/', async (req, res) => {
     );
 });
 
+// Theatre-style tent / bed map (camp staff and authorities)
+router.get('/:id/bed-map', requireAuth, requirePermission('inventory:view'), async (req, res) => {
+    res.json(await lodging.bedMap(req.params.id, req.user));
+});
+
 router.get('/bookings/mine', requireAuth, async (req, res) => {
     res.json(await lodging.mine(req.user._id));
 });

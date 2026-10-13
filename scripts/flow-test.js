@@ -65,6 +65,10 @@ async function main() {
         check('Free camp booking has tent and bed numbers', /Bed/.test(b.pass.details.location || ''), b.pass.details.location);
         const assigned = await BedAssignment.countDocuments({ bookingId: b.booking._id });
         check('Two BedAssignment rows created', assigned === 2);
+        const authority = await User.findOne({ phone: '9000000002' }).lean();
+        const map = await lodging.bedMap(freeCamp._id, { ...authority });
+        const mine = map.units.flatMap((u) => u.beds).filter((x) => String(x.bookingId) === String(b.booking._id));
+        check('Tent map shows both beds as booked with guest names', mine.length === 2 && mine.every((x) => x.status === 'BOOKED' && x.guest), mine.map((x) => x.guest).join(', '));
         await lodging.cancel(b.booking._id, user);
         check('Cancelling frees the bed numbers', (await BedAssignment.countDocuments({ bookingId: b.booking._id })) === 0);
 

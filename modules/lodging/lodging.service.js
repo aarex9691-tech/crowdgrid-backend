@@ -208,4 +208,62 @@ const cancel = async (bookingId, user) => {
 const mine = async (userId) =>
     LodgingBooking.find({ userId }).populate('lodgingId', 'name sector category').sort({ createdAt: -1 }).lean();
 
-module.exports = { search, quote, book, cancel, mine, MAX_BEDS_PER_USER };
+/**
+ * Theatre-style bed map for camp staff and authorities: every tent / room /
+ * hall with each bed marked free, booked online (with guest and stay) or held
+ * offline (walk-ins). NGO admins can only open their own camps.
+ */
+const bedMap = async (lodgingId, user) => {
+    if (!mongoose.isValidObjectId(lodgingId)) throw badRequest('Invalid camp');
+    const lodging = await Lodging.findById(lodgingId).populate('providerId', 'name').lean();
+    if (!lodging) throw notFound('Camp not found');
+    if (user.role === 'NGO_ADMIN' && String(lodging.providerId?._id) !== String(user.providerId)) {
+        throw forbidden('You can only view your own camps');
+    }
+    const unit = bedAlloc.unitFor(lodging);
+    const assignments = await bedAlloc.BedAssignment.find({ lodgingId: lodging._id }).lean();
+    const bookingIds = [...new Set(assignments.filter((a) => a.bookingId).map((a) => String(a.bookingId)))];
+    const bookings = await LodgingBooking.find({ _id: { $in: bookingIds } }).populate('userId', 'name').lean();
+    const byId = new Map(bookings.map((b) => [String(b._id), b]));
+
+    const taken = new Map();
+    for (const a of assignments) {
+        const b = a.bookingId && byId.get(String(a.bookingId));
+        if (!b) {
+            taken.set(a.bedNo, { status: 'HELD' });
+            continue;
+        }
+        const idx = (b.bedNos || []).indexOf(a.bedNo);
+        taken.set(a.bedNo, {
+            status: 'BOOKED',
+            guest: b.guestNames?.[idx] || null,
+            bookedBy: b.userId?.name || null,
+            checkIn: b.checkIn,
+            checkOut: b.checkOut,
+            bookingId: b._id,
+        });
+    }
+
+    const units = [];
+    const count = Math.ceil(lodging.totalBeds / unit.size);
+    for (let u = 1; u <= count; u++) {
+        const beds = [];
+        for (let n = (u - 1) * unit.size + 1; n <= Math.min(u * unit.size, lodging.totalBeds); n++) {
+            beds.push({ bedNo: n, bed: n - (u - 1) * unit.size, ...(taken.get(n) || { status: 'FREE' }) });
+        }
+        units.push({ unitNo: u, label: `${unit.label} ${unit.prefix}-${u}`, beds, free: beds.filter((b) => b.status === 'FREE').length });
+    }
+    return {
+        lodging: { _id: lodging._id, name: lodging.name, sector: lodging.sector, category: lodging.category, provider: lodging.providerId?.name, totalBeds: lodging.totalBeds, availableBeds: lodging.availableBeds },
+        unit: { label: unit.label, size: unit.size },
+        summary: {
+            units: units.length,
+            free: units.reduce((s, x) => s + x.free, 0),
+            booked: assignments.filter((a) => a.bookingId).length,
+            held: assignments.filter((a) => !a.bookingId).length,
+        },
+        units,
+    };
+};
+
+module.exports = { search, quote, book, cancel, mine, bedMap, MAX_BEDS_PER_USER };
