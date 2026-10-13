@@ -83,6 +83,25 @@ const pick = (body, kind) => {
     );
 };
 
+/**
+ * Hosted events (public and corporate) share one date rule: a single sitting
+ * that starts in the future, at most a year ahead, lasting 30 minutes to 12 hours.
+ */
+const HOSTED_MAX_DAYS_AHEAD = 365;
+const assertHostedWindow = (startDate, endDate) => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) throw badRequest('Choose a valid date, start time and end time');
+    const now = Date.now();
+    if (start.getTime() < now) throw badRequest('The event must start in the future');
+    if (start.getTime() > now + HOSTED_MAX_DAYS_AHEAD * 86400000) throw badRequest('Events can be scheduled at most one year ahead');
+    const minutes = (end - start) / 60000;
+    if (minutes < 30) throw badRequest('The event must end at least 30 minutes after it starts');
+    if (minutes > 12 * 60) throw badRequest('An event can last at most 12 hours');
+};
+
+const DESC_MIN = 150;
+const DESC_MAX = 200;
 const PUBLIC_CATEGORIES = ['SPIRITUAL', 'CULTURAL', 'HERITAGE_WALK', 'SEVA', 'WORKSHOP', 'OTHER'];
 
 /** Checks a paid public event before it is saved; returns the cleaned data. */
@@ -99,13 +118,16 @@ const validatePublic = (data, user) => {
     need('endDate', 'End date and time');
     if (String(data.title).length > 100) throw badRequest('Title can be at most 100 characters');
     const desc = String(data.description);
-    if (desc.length < 20) throw badRequest('Description must be at least 20 characters');
-    if (desc.length > 500) throw badRequest('Description can be at most 500 characters');
+    // Counted without spaces, so padding with spaces cannot meet or dodge the limit
+    const letters = desc.replace(/\s/g, '').length;
+    if (letters < DESC_MIN) throw badRequest(`Description needs at least ${DESC_MIN} characters (not counting spaces); it has ${letters}`);
+    if (letters > DESC_MAX) throw badRequest(`Description can have at most ${DESC_MAX} characters (not counting spaces); it has ${letters}`);
     data.category = String(data.category || '').toUpperCase();
     if (!PUBLIC_CATEGORIES.includes(data.category)) throw badRequest(`Category must be one of ${PUBLIC_CATEGORIES.join(', ')}`);
     if (data.pincode !== undefined && !/^\d{6}$/.test(String(data.pincode))) throw badRequest('Pincode must be 6 digits');
-    const price = Number(data.ticketPrice);
-    if (!Number.isInteger(price) || price < 1 || price > 100000) throw badRequest('Ticket price must be between ₹1 and ₹1,00,000 (public events are paid)');
+    // ₹0 = free entry: registration is confirmed straight away, no payment step
+    const price = Number(data.ticketPrice ?? 0);
+    if (!Number.isInteger(price) || price < 0 || price > 100000) throw badRequest('Ticket price must be between ₹0 (free) and ₹1,00,000');
     data.ticketPrice = price;
     const cap = Number(data.capacity);
     if (!Number.isInteger(cap) || cap < 1 || cap > 100000) throw badRequest('Capacity must be between 1 and 1,00,000 people');
@@ -145,11 +167,10 @@ const create = async (body, user) => {
         data.sessions = normaliseSessions(data.sessions);
         if (!data.sessions.length) throw badRequest('Add at least one session or meal');
     }
-    if (data.startDate && data.endDate && new Date(data.endDate) < new Date(data.startDate)) {
+    if (data.kind === 'PUBLIC' || data.kind === 'CORPORATE') {
+        assertHostedWindow(data.startDate, data.endDate);
+    } else if (data.startDate && data.endDate && new Date(data.endDate) < new Date(data.startDate)) {
         throw badRequest('The event must end after it starts');
-    }
-    if (data.endDate && new Date(data.endDate) <= new Date()) {
-        throw badRequest('This event would already be over. Choose a later date or end time.');
     }
     data.slug = `${slugify(data.title || 'event')}-${crypto.randomBytes(3).toString('hex')}`;
     data.organizerId = user._id;
@@ -284,6 +305,9 @@ const update = async (id, body, user) => {
         const merged = validatePublic({ ...event.toObject(), ...data }, user);
         for (const k of KIND_FIELDS.PUBLIC) if (data[k] !== undefined) data[k] = merged[k];
         delete data.attendeesCount;
+    }
+    if ((data.startDate || data.endDate) && ['PUBLIC', 'CORPORATE'].includes(event.kind)) {
+        assertHostedWindow(data.startDate ?? event.startDate, data.endDate ?? event.endDate);
     }
     if (data.capacity !== undefined && Number(data.capacity) < event.attendeesCount) {
         throw badRequest(`Capacity cannot be below the ${event.attendeesCount} people already registered`);

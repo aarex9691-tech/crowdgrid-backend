@@ -45,6 +45,7 @@ async function main() {
     await User.deleteMany({ phone: PHONE });
     let me;
     let hostedId;
+    let freeId;
     try {
         // ---- 1. Phone numbers ----
         await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'T', phone: '900000000612', password: 'Crowd@123' }), 400);
@@ -114,9 +115,14 @@ async function main() {
         const authorityUser = await User.findOne({ phone: '9000000002' }).lean();
         const host = { ...authorityUser, id: String(authorityUser._id) };
         const start = new Date(Date.now() + 2 * 864e5);
-        const base = { kind: 'PUBLIC', title: 'Flow test aarti', category: 'SPIRITUAL', description: 'A test event created by the flow test script.', venue: 'Test ghat', address: 'Ramkund, Nashik', city: 'Nashik', pincode: '422003', location: { lat: 20.0059, lng: 73.7897 }, startDate: start, endDate: new Date(start.getTime() + 2 * 3600e3), capacity: 5 };
-        await expectError('Free public events are refused (all are paid)', () => events.create({ ...base, ticketPrice: 0 }, host), 400);
-        await expectError('Description over 500 characters is refused', () => events.create({ ...base, ticketPrice: 99, description: 'x'.repeat(501) }, host), 400);
+        const base = { kind: 'PUBLIC', title: 'Flow test aarti', category: 'SPIRITUAL', description: 'A test event created by the flow test script to check hosting, the description limits, ticket checkout and the host dashboard. It is deleted automatically when the test run finishes.', venue: 'Test ghat', address: 'Ramkund, Nashik', city: 'Nashik', pincode: '422003', location: { lat: 20.0059, lng: 73.7897 }, startDate: start, endDate: new Date(start.getTime() + 2 * 3600e3), capacity: 5 };
+        await expectError('Description over 200 characters (spaces not counted) is refused', () => events.create({ ...base, ticketPrice: 99, description: 'x'.repeat(201) }, host), 400);
+        await expectError('Description under 150 characters (spaces not counted) is refused', () => events.create({ ...base, ticketPrice: 99, description: 'too short' }, host), 400);
+        await expectError('An event more than a year ahead is refused', () => events.create({ ...base, ticketPrice: 99, startDate: new Date(Date.now() + 400 * 864e5), endDate: new Date(Date.now() + 400 * 864e5 + 3600e3) }, host), 400);
+        const freeEv = await events.create({ ...base, title: 'Flow test free darshan', ticketPrice: 0 }, host);
+        freeId = freeEv._id;
+        const freeReg = await events.register(freeId, user);
+        check('A ₹0 event registers directly, no payment step', freeReg.pass?.type === 'PUBLIC');
         await expectError('A pilgrim cannot host an event', () => events.create({ ...base, ticketPrice: 99 }, user), 403);
         hostedId = (await events.create({ ...base, ticketPrice: 99, sectors: ['should be dropped'] }, host))._id;
         const stored = await Event.findById(hostedId).lean();
@@ -150,6 +156,10 @@ async function main() {
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
             await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id })]);
             await User.deleteOne({ _id: me._id });
+        }
+        if (freeId) {
+            await Pass.deleteMany({ eventId: freeId });
+            await Event.deleteOne({ _id: freeId });
         }
         if (hostedId) {
             await Pass.deleteMany({ eventId: hostedId });

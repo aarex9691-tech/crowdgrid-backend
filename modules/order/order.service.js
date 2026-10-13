@@ -55,7 +55,6 @@ const create = async (user, items) => {
         }
     }
     const total = priced.reduce((s, i) => s + i.amount, 0);
-    if (total <= 0) throw badRequest('These items are free; book them directly without checkout');
     const order = await Order.create({ userId: user._id, items: priced, total });
     return toView(order);
 };
@@ -108,22 +107,26 @@ const pay = async (orderId, user, body = {}) => {
         throw conflict('Payment is already in progress for this order');
     }
 
-    const method = String(body.method || '').toUpperCase();
-    const result = await gateway().charge({
-        amount: locked.total,
-        method,
-        upiId: body.upiId,
-        cardNumber: body.cardNumber,
-        expiry: body.expiry,
-        cvv: body.cvv,
-    });
+    const method = locked.total === 0 ? 'FREE' : String(body.method || '').toUpperCase();
+    // A ₹0 order (free items only) is confirmed without going to the payment gateway
+    const result =
+        locked.total === 0
+            ? { ok: true, account: '-', reference: `FREE${String(locked._id).slice(-8).toUpperCase()}` }
+            : await gateway().charge({
+                  amount: locked.total,
+                  method,
+                  upiId: body.upiId,
+                  cardNumber: body.cardNumber,
+                  expiry: body.expiry,
+                  cvv: body.cvv,
+              });
     if (!result.ok) {
         await Order.updateOne({ _id: locked._id }, { $set: { status: 'PENDING', 'payment.lastError': result.message } });
         throw new HttpError(402, result.message);
     }
 
     locked.status = 'PAID';
-    locked.payment = { provider: gateway().name, method, account: result.account, reference: result.reference, paidAt: new Date() };
+    locked.payment = { provider: locked.total === 0 ? 'NONE' : gateway().name, method, account: result.account, reference: result.reference, paidAt: new Date() };
     await fulfil(locked, user);
     await locked.save();
 
