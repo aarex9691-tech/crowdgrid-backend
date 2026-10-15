@@ -29,12 +29,13 @@ const check = (name, ok, extra = '') => {
     console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  (${extra})` : ''}`);
     if (!ok) failed++;
 };
-const expectError = async (name, fn, status) => {
+// Optional `about` regex: the error must be about the right thing, not some other rule
+const expectError = async (name, fn, status, about) => {
     try {
         await fn();
         check(name, false, 'no error');
     } catch (err) {
-        check(name, !status || err.status === status, `${err.status} ${err.message}`);
+        check(name, (!status || err.status === status) && (!about || about.test(err.message)), `${err.status} ${err.message}`);
     }
 };
 
@@ -48,8 +49,8 @@ async function main() {
     let freeId;
     try {
         // ---- 1. Phone numbers ----
-        await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'T', phone: '900000000612', password: 'Crowd@123' }), 400);
-        await expectError('Register rejects a 5-digit number', () => auth.register({ name: 'T', phone: '90000', password: 'Crowd@123' }), 400);
+        await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'Test Pilgrim', phone: '900000000612', password: 'Crowd@123' }), 400, /mobile number/i);
+        await expectError('Register rejects a 5-digit number', () => auth.register({ name: 'Test Pilgrim', phone: '90000', password: 'Crowd@123' }), 400, /mobile number/i);
         const reg = await auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123' });
         me = await User.findById(reg.user._id).lean();
         check('Register with +91 works', !!me && me.countryCode === '91');
@@ -135,7 +136,7 @@ async function main() {
         const foreignContact = await events.create({ ...base, title: 'Flow test foreign contact', ticketPrice: 99, contactCountryCode: '44', contactPhone: '7700 900123' }, host);
         check('Contact number with a country code is saved as digits', foreignContact.contactCountryCode === '44' && foreignContact.contactPhone === '7700900123');
         await Event.deleteOne({ _id: foreignContact._id });
-        await expectError('A name with digits is refused at sign-up', () => auth.register({ name: 'Ram3sh', phone: '6999999991', countryCode: '91', password: 'Test@1234' }), 400);
+        await expectError('A name with digits is refused at sign-up', () => auth.register({ name: 'Ram3sh', phone: '6999999991', countryCode: '91', password: 'Test@1234' }), 400, /name/i);
         await expectError('Your own number as emergency contact is refused', () => auth.updateProfile(user, { emergencyContact: { name: 'Me', countryCode: '91', phone: PHONE } }), 400);
         const freeEv = await events.create({ ...base, title: 'Flow test free darshan', ticketPrice: 0 }, host);
         freeId = freeEv._id;
