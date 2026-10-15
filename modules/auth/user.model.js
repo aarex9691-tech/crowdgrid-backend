@@ -25,7 +25,8 @@ const userSchema = new mongoose.Schema(
         emergencyContact: {
             _id: false,
             name: { type: String, trim: true, maxlength: 60 },
-            phone: { type: String, match: [/^\d{10}$/, 'Emergency contact must be a 10-digit number'] },
+            countryCode: { type: String, match: [/^\d{1,4}$/, 'Invalid country code'] },
+            phone: { type: String, match: [/^\d{6,15}$/, 'Emergency contact must be digits only'] },
         },
         isActive: { type: Boolean, default: true },
         // Account lockout after repeated wrong passwords

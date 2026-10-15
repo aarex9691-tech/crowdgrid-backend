@@ -125,6 +125,18 @@ async function main() {
         await expectError('Description over 200 characters (spaces not counted) is refused', () => events.create({ ...base, ticketPrice: 99, description: 'x'.repeat(201) }, host), 400);
         await expectError('Description under 150 characters (spaces not counted) is refused', () => events.create({ ...base, ticketPrice: 99, description: 'too short' }, host), 400);
         await expectError('An event more than a year ahead is refused', () => events.create({ ...base, ticketPrice: 99, startDate: new Date(Date.now() + 400 * 864e5), endDate: new Date(Date.now() + 400 * 864e5 + 3600e3) }, host), 400);
+        // Input rules (same as the forms in the browser)
+        await expectError('Contact number with letters is refused', () => events.create({ ...base, ticketPrice: 99, contactPhone: '98765abc10' }, host), 400);
+        await expectError('Capacity written as 1e5 is refused', () => events.create({ ...base, ticketPrice: 99, capacity: '1e5' }, host), 400);
+        await expectError('Negative ticket price is refused', () => events.create({ ...base, ticketPrice: -5 }, host), 400);
+        await expectError('PIN code starting with 0 is refused', () => events.create({ ...base, ticketPrice: 99, pincode: '022001' }, host), 400);
+        await expectError('City with digits or symbols is refused', () => events.create({ ...base, ticketPrice: 99, city: 'Nashik123!' }, host), 400);
+        await expectError('Venue longer than 120 characters is refused', () => events.create({ ...base, ticketPrice: 99, venue: 'v'.repeat(121) }, host), 400);
+        const foreignContact = await events.create({ ...base, title: 'Flow test foreign contact', ticketPrice: 99, contactCountryCode: '44', contactPhone: '7700 900123' }, host);
+        check('Contact number with a country code is saved as digits', foreignContact.contactCountryCode === '44' && foreignContact.contactPhone === '7700900123');
+        await Event.deleteOne({ _id: foreignContact._id });
+        await expectError('A name with digits is refused at sign-up', () => auth.register({ name: 'Ram3sh', phone: '6999999991', countryCode: '91', password: 'Test@1234' }), 400);
+        await expectError('Your own number as emergency contact is refused', () => auth.updateProfile(user, { emergencyContact: { name: 'Me', countryCode: '91', phone: PHONE } }), 400);
         const freeEv = await events.create({ ...base, title: 'Flow test free darshan', ticketPrice: 0 }, host);
         freeId = freeEv._id;
         const freeReg = await events.register(freeId, user);

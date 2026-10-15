@@ -7,6 +7,7 @@ const { Pass } = require('../pass/pass.model');
 const { ROLES } = require('../../config/roles');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, forbidden, notFound } = require('../../utils/httpError');
+const v = require('../../utils/validate');
 const audit = require('../audit/audit.service');
 
 /**
@@ -50,19 +51,20 @@ const dashboard = async (user, providerId) => {
 
 const addLodging = async (user, body = {}) => {
     const provider = await resolveProvider(user, body.providerId);
-    const totalBeds = Number(body.totalBeds);
-    if (!Number.isInteger(totalBeds) || totalBeds < 1) throw badRequest('totalBeds must be a positive whole number');
+    const name = v.text(body.name, 'Camp name', 'campName', { required: true });
+    const totalBeds = v.int(body.totalBeds, 'Total beds', { min: 1, max: 5000, required: true });
+    const pricePerNight = v.int(body.pricePerNight, 'Price per night (₹)', { min: 0, max: 10000 }) || 0;
     if (!CATEGORIES.includes(body.category)) throw badRequest(`category must be one of ${CATEGORIES.join(', ')}`);
     const lodging = await Lodging.create({
         eventId: provider.eventId,
         providerId: provider._id,
-        name: body.name,
+        name,
         sector: body.sector,
         category: body.category,
         distanceToGhatKm: body.distanceToGhatKm,
         amenities: Array.isArray(body.amenities) ? body.amenities : [],
         location: body.location,
-        pricePerNight: body.pricePerNight || 0,
+        pricePerNight,
         totalBeds,
         availableBeds: totalBeds,
     });
@@ -72,8 +74,8 @@ const addLodging = async (user, body = {}) => {
 
 /** Add (positive) or remove (negative) beds. Removing only succeeds if those beds are free. */
 const adjustBeds = async (user, lodgingId, change) => {
-    const delta = Number(change);
-    if (!Number.isInteger(delta) || delta === 0) throw badRequest('change must be a non-zero whole number');
+    const delta = v.int(change, 'Change in beds', { min: -1000, max: 1000, required: true });
+    if (delta === 0) throw badRequest('Change in beds cannot be 0');
     const lodging = await Lodging.findById(lodgingId).lean();
     if (!lodging) throw notFound('Camp not found');
     const provider = await resolveProvider(user, lodging.providerId);
@@ -98,7 +100,7 @@ const addFoodCenter = async (user, body = {}) => {
     const center = await FoodCenter.create({
         eventId: provider.eventId,
         providerId: provider._id,
-        name: body.name,
+        name: v.text(body.name, 'Kitchen name', 'campName', { required: true }),
         sector: body.sector,
         menu: Array.isArray(body.menu) ? body.menu : String(body.menu || '').split(',').map((s) => s.trim()).filter(Boolean),
         location: body.location,
@@ -114,8 +116,7 @@ const setSlot = async (user, centerId, { date, meal, capacity } = {}) => {
     if (String(provider._id) !== String(center.providerId)) throw forbidden('Not your kitchen');
     if (!isDateString(date)) throw badRequest('date must be YYYY-MM-DD');
     if (!MEALS[meal]) throw badRequest(`meal must be one of ${Object.keys(MEALS).join(', ')}`);
-    const cap = Number(capacity);
-    if (!Number.isInteger(cap) || cap < 0) throw badRequest('capacity must be a whole number');
+    const cap = v.int(capacity, 'Meal tokens', { min: 0, max: 20000, required: true });
 
     const existing = await FoodSlot.findOne({ foodCenterId: center._id, date, meal });
     if (!existing) {

@@ -11,6 +11,7 @@ const reportSchema = new mongoose.Schema(
         clothes: { type: String, maxlength: 300 },
         lastSeenAt: String, // place
         currentlyAt: String, // for FOUND: camp / police post where the person is safe
+        contactCountryCode: String,
         contactPhone: String,
         photoUrl: String,
         status: { type: String, enum: ['OPEN', 'REUNITED'], default: 'OPEN' },

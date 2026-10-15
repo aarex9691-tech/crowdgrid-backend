@@ -6,10 +6,14 @@ const { withTransaction } = require('../../utils/tx');
 const audit = require('../audit/audit.service');
 const { ROLES } = require('../../config/roles');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
+const v = require('../../utils/validate');
 
 /** A USER applies to register their NGO / trust for an event. */
-const apply = async (user, { name, type, eventId, registrationNumber, contactPhone, description } = {}) => {
-    if (!name) throw badRequest('Organisation name is required');
+const apply = async (user, { name: rawName, type, eventId, registrationNumber: rawReg, contactCountryCode, contactPhone: rawPhone, description: rawDesc } = {}) => {
+    const name = v.text(rawName, 'Organisation name', 'orgName', { required: true });
+    const registrationNumber = v.text(rawReg, 'Registration number', 'regNumber');
+    const description = v.text(rawDesc, 'About the organisation', 'longText');
+    const contact = v.mobile(contactCountryCode, rawPhone, 'Contact number');
     if (!mongoose.isValidObjectId(eventId) || !(await Event.exists({ _id: eventId, kind: 'YATRA' }))) {
         throw badRequest('Choose a yatra event to serve at');
     }
@@ -22,7 +26,8 @@ const apply = async (user, { name, type, eventId, registrationNumber, contactPho
         eventId,
         adminUserId: user._id,
         registrationNumber,
-        contactPhone: contactPhone || user.phone,
+        contactCountryCode: contact ? contact.countryCode : user.countryCode || '91',
+        contactPhone: contact ? contact.phone : user.phone,
         description,
     });
     return provider.toObject();

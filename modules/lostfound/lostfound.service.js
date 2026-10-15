@@ -3,8 +3,9 @@ const LostFoundReport = require('./lostfound.model');
 const { hasPermission, STAFF } = require('../../config/roles');
 const audit = require('../audit/audit.service');
 const { badRequest, forbidden, notFound } = require('../../utils/httpError');
+const v = require('../../utils/validate');
 
-const FIELDS = ['eventId', 'personName', 'age', 'gender', 'description', 'clothes', 'lastSeenAt', 'currentlyAt', 'contactPhone'];
+const FIELDS = ['eventId', 'personName', 'age', 'gender', 'description', 'clothes', 'lastSeenAt', 'currentlyAt'];
 
 const create = async (user, body = {}, photoUrl) => {
     const kind = String(body.kind || '').toUpperCase();
@@ -15,8 +16,17 @@ const create = async (user, body = {}, photoUrl) => {
     }
     const data = Object.fromEntries(FIELDS.filter((k) => body[k] !== undefined && body[k] !== '').map((k) => [k, body[k]]));
     if (data.eventId && !mongoose.isValidObjectId(data.eventId)) delete data.eventId;
-    if (kind === 'MISSING' && !data.personName) throw badRequest("Missing person's name is required");
-    if (kind === 'MISSING' && !data.contactPhone) data.contactPhone = user.phone;
+    // Same rules as the report form in the browser
+    data.personName = v.text(data.personName, "Person's name", 'personName', { required: kind === 'MISSING' });
+    data.age = v.int(data.age, 'Age', { min: 0, max: 120 });
+    data.description = v.text(data.description, 'Description', 'longText');
+    data.clothes = v.text(data.clothes, 'Clothes', 'shortText');
+    data.lastSeenAt = v.text(data.lastSeenAt, 'Last seen at', 'venue', { required: kind === 'MISSING' });
+    data.currentlyAt = v.text(data.currentlyAt, 'Currently at', 'venue');
+    const contact = v.mobile(body.contactCountryCode, body.contactPhone, 'Contact number');
+    data.contactCountryCode = contact ? contact.countryCode : user.countryCode || '91';
+    data.contactPhone = contact ? contact.phone : user.phone;
+    for (const k of Object.keys(data)) if (data[k] === undefined) delete data[k];
     const report = await LostFoundReport.create({ ...data, kind, photoUrl, reportedBy: user._id });
     return report.toObject();
 };

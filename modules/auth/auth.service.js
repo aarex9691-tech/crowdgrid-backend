@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('./user.model');
 const { ROLES } = require('../../config/roles');
 const { HttpError, badRequest, unauthorized, conflict, notFound } = require('../../utils/httpError');
+const v = require('../../utils/validate');
 const audit = require('../audit/audit.service');
 
 const SALT_ROUNDS = 10;
@@ -60,7 +61,8 @@ const validatePassword = (password) => {
  * sent by the client is ignored. Higher roles are granted only through
  * approval flows or by the Super Admin (principle of least privilege).
  */
-const register = async ({ name, phone, countryCode, email, password }) => {
+const register = async ({ name: rawName, phone, countryCode, email, password }) => {
+    const name = v.text(rawName, 'Full name', 'personName', { required: true });
     validatePassword(password);
     const mobile = cleanPhoneOrThrow(countryCode, phone);
     if (await User.exists(phoneQuery(mobile))) throw conflict('An account with this mobile number already exists');
@@ -175,9 +177,7 @@ const updateProfile = async (user, body = {}) => {
     };
 
     if (body.name !== undefined) {
-        const name = String(body.name).trim();
-        if (name.length < 2 || name.length > 80) throw badRequest('Name must be 2 to 80 characters');
-        set.name = name;
+        set.name = v.text(body.name, 'Full name', 'personName', { required: true });
     }
     if (body.email !== undefined) {
         const email = String(body.email || '').trim().toLowerCase();
@@ -200,18 +200,19 @@ const updateProfile = async (user, body = {}) => {
         put('gender', g);
     }
     if (body.city !== undefined) {
-        const c = String(body.city || '').trim();
-        if (c.length > 60) throw badRequest('City can be at most 60 characters');
-        put('city', c);
+        put('city', v.text(body.city, 'City', 'city') || '');
     }
     if (body.emergencyContact !== undefined) {
-        const n = String(body.emergencyContact?.name || '').trim();
-        const ph = String(body.emergencyContact?.phone || '').replace(/\D/g, '');
-        if (!n && !ph) unset.emergencyContact = 1;
+        const ec = body.emergencyContact || {};
+        const n = v.text(ec.name, 'Emergency contact name', { min: 2, max: 60, kind: 'name' });
+        const contact = v.mobile(ec.countryCode, ec.phone, 'Emergency contact number');
+        if (!n && !contact) unset.emergencyContact = 1;
         else {
-            if (!/^\d{10}$/.test(ph)) throw badRequest('Emergency contact number must be 10 digits');
-            if (n.length > 60) throw badRequest('Emergency contact name can be at most 60 characters');
-            set.emergencyContact = { name: n || undefined, phone: ph };
+            if (!contact) throw badRequest('Add the emergency contact\'s mobile number');
+            if (contact.phone === user.phone && contact.countryCode === (user.countryCode || '91')) {
+                throw badRequest('The emergency contact must be someone else, not your own number');
+            }
+            set.emergencyContact = { name: n, countryCode: contact.countryCode, phone: contact.phone };
         }
     }
     const update = {};

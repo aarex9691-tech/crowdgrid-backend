@@ -43,12 +43,13 @@ const eventSchema = new mongoose.Schema(
         ticketPrice: { type: Number, min: 0 }, // rupees per person
         minAge: { type: Number, min: 0, max: 100 },
         hostName: { type: String, maxlength: 80 },
-        contactPhone: { type: String, match: [/^[6-9]\d{9}$/, 'Contact must be a 10-digit Indian mobile number'] },
+        contactCountryCode: { type: String, match: [/^\d{1,4}$/, 'Country code must be digits'] },
+        contactPhone: { type: String, match: [/^\d{6,15}$/, 'Contact number must be digits only'] },
         capacity: { type: Number, min: 0 },
         attendeesCount: { type: Number, min: 0 }, // set to 0 only for PUBLIC / CORPORATE events
 
         // CORPORATE
-        companyName: String,
+        companyName: { type: String, maxlength: 120 },
         accessCode: { type: String, select: false },
         sessions: { type: [sessionSchema], default: undefined },
 

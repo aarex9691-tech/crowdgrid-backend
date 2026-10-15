@@ -8,6 +8,7 @@ const providerSchema = new mongoose.Schema(
         eventId: { type: mongoose.Schema.Types.ObjectId, ref: 'Event', required: true },
         adminUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         registrationNumber: String,
+        contactCountryCode: String,
         contactPhone: String,
         description: String,
         verificationStatus: { type: String, enum: ['PENDING', 'VERIFIED', 'REJECTED'], default: 'PENDING' },

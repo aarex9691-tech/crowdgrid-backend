@@ -57,7 +57,7 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
         throw badRequest(`One token can cover 1 to ${MAX_PEOPLE_PER_TOKEN} people`);
     }
     const guests = (Array.isArray(names) ? names : String(names || '').split(','))
-        .map((n) => String(n).trim().slice(0, 60))
+        .map((n) => String(n).replace(/[^\p{L}\p{M} .'-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 60))
         .filter(Boolean)
         .slice(0, count);
     const slot = await FoodSlot.findById(slotId).lean();

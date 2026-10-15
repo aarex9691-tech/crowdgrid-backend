@@ -8,6 +8,7 @@ const { issuePass, toClient } = require('../pass/pass.service');
 const { hasPermission, ROLES } = require('../../config/roles');
 const audit = require('../audit/audit.service');
 const { HttpError, badRequest, forbidden, notFound, conflict } = require('../../utils/httpError');
+const v = require('../../utils/validate');
 
 const findEvent = async (idOrSlug, projection) => {
     const query = mongoose.isValidObjectId(idOrSlug) ? { _id: idOrSlug } : { slug: String(idOrSlug).toLowerCase() };
@@ -73,7 +74,7 @@ const assertCanManageKind = (user, kind) => {
 const COMMON_FIELDS = ['title', 'kind', 'description', 'city', 'state', 'venue', 'startDate', 'endDate'];
 const KIND_FIELDS = {
     YATRA: ['tagline', 'isFlagship', 'expectedFootfall', 'keyDates', 'sectors'],
-    PUBLIC: ['category', 'address', 'pincode', 'location', 'ticketPrice', 'minAge', 'hostName', 'contactPhone', 'capacity'],
+    PUBLIC: ['category', 'address', 'pincode', 'location', 'ticketPrice', 'minAge', 'hostName', 'contactCountryCode', 'contactPhone', 'capacity'],
     CORPORATE: ['companyName', 'sessions', 'capacity'],
 };
 const pick = (body, kind) => {
@@ -106,17 +107,14 @@ const PUBLIC_CATEGORIES = ['SPIRITUAL', 'CULTURAL', 'HERITAGE_WALK', 'SEVA', 'WO
 
 /** Checks a paid public event before it is saved; returns the cleaned data. */
 const validatePublic = (data, user) => {
-    const need = (k, label) => {
-        if (data[k] === undefined || data[k] === '') throw badRequest(`${label} is required`);
-    };
-    need('title', 'Title');
-    need('description', 'Description');
-    need('venue', 'Venue');
-    need('address', 'Address');
-    need('city', 'City');
-    need('startDate', 'Start date and time');
-    need('endDate', 'End date and time');
-    if (String(data.title).length > 100) throw badRequest('Title can be at most 100 characters');
+    // Same rules as the host form in the browser (utils/validate.js)
+    data.title = v.text(data.title, 'Title', 'title', { required: true });
+    if (data.description === undefined || data.description === '') throw badRequest('Description is required');
+    data.venue = v.text(data.venue, 'Venue name', 'venue', { required: true });
+    data.address = v.text(data.address, 'Street / landmark', 'address', { required: true });
+    data.city = v.text(data.city, 'City', 'city', { required: true });
+    if (!data.startDate) throw badRequest('Start date and time is required');
+    if (!data.endDate) throw badRequest('End date and time is required');
     const desc = String(data.description);
     // Counted without spaces, so padding with spaces cannot meet or dodge the limit
     const letters = desc.replace(/\s/g, '').length;
@@ -124,23 +122,14 @@ const validatePublic = (data, user) => {
     if (letters > DESC_MAX) throw badRequest(`Description can have at most ${DESC_MAX} characters (not counting spaces); it has ${letters}`);
     data.category = String(data.category || '').toUpperCase();
     if (!PUBLIC_CATEGORIES.includes(data.category)) throw badRequest(`Category must be one of ${PUBLIC_CATEGORIES.join(', ')}`);
-    if (data.pincode !== undefined && !/^\d{6}$/.test(String(data.pincode))) throw badRequest('Pincode must be 6 digits');
+    data.pincode = v.pincode(data.pincode);
     // ₹0 = free entry: registration is confirmed straight away, no payment step
-    const price = Number(data.ticketPrice ?? 0);
-    if (!Number.isInteger(price) || price < 0 || price > 100000) throw badRequest('Ticket price must be between ₹0 (free) and ₹1,00,000');
-    data.ticketPrice = price;
-    const cap = Number(data.capacity);
-    if (!Number.isInteger(cap) || cap < 1 || cap > 100000) throw badRequest('Capacity must be between 1 and 1,00,000 people');
-    data.capacity = cap;
-    if (data.minAge !== undefined) {
-        const a = Number(data.minAge);
-        if (!Number.isInteger(a) || a < 0 || a > 100) throw badRequest('Minimum age must be between 0 and 100');
-        data.minAge = a || undefined;
-    }
-    if (data.contactPhone !== undefined) {
-        data.contactPhone = String(data.contactPhone).replace(/\D/g, '');
-        if (!/^[6-9]\d{9}$/.test(data.contactPhone)) throw badRequest('Contact number must be a 10-digit Indian mobile number');
-    }
+    data.ticketPrice = v.int(data.ticketPrice ?? 0, 'Ticket price (₹)', { min: 0, max: 100000, required: true });
+    data.capacity = v.int(data.capacity, 'Capacity', { min: 1, max: 100000, required: true });
+    data.minAge = v.int(data.minAge, 'Minimum age', { min: 0, max: 100 }) || undefined;
+    const contact = v.mobile(data.contactCountryCode, data.contactPhone, 'Contact number');
+    data.contactCountryCode = contact?.countryCode;
+    data.contactPhone = contact?.phone;
     if (data.location !== undefined) {
         const lat = Number(data.location?.lat);
         const lng = Number(data.location?.lng);
@@ -163,7 +152,7 @@ const create = async (body, user) => {
         data.attendeesCount = 0;
         // Corporate access codes are always generated by the server (never chosen by people)
         data.accessCode = await uniqueAccessCode();
-        if (!data.companyName) throw badRequest('Company name is required for corporate events');
+        validateCorporate(data);
         data.sessions = normaliseSessions(data.sessions);
         if (!data.sessions.length) throw badRequest('Add at least one session or meal');
     }
@@ -180,6 +169,17 @@ const create = async (body, user) => {
     // The organiser sees the generated code once here; later via GET /:id/corporate/code
     if (data.kind !== 'CORPORATE') delete out.accessCode;
     return out;
+};
+
+/** Campus & Corporate events: same field rules as the create form. */
+const validateCorporate = (data) => {
+    data.title = v.text(data.title, 'Event title', 'title', { required: true });
+    data.companyName = v.text(data.companyName, 'Organisation name', 'orgName', { required: true });
+    data.venue = v.text(data.venue, 'Venue', 'venue', { required: true });
+    data.city = v.text(data.city, 'City', 'city', { required: true });
+    data.description = v.text(data.description, 'Description', 'longText');
+    if (data.capacity !== undefined) data.capacity = v.int(data.capacity, 'Capacity', { min: 1, max: 100000 });
+    return data;
 };
 
 /** Cleans the session list from the create form; gives each session a stable code. */
@@ -303,7 +303,7 @@ const update = async (id, body, user) => {
     delete data.kind; // kind cannot change
     if (event.kind === 'PUBLIC') {
         const merged = validatePublic({ ...event.toObject(), ...data }, user);
-        for (const k of KIND_FIELDS.PUBLIC) if (data[k] !== undefined) data[k] = merged[k];
+        for (const k of [...COMMON_FIELDS, ...KIND_FIELDS.PUBLIC]) if (data[k] !== undefined) data[k] = merged[k];
         delete data.attendeesCount;
     }
     if ((data.startDate || data.endDate) && ['PUBLIC', 'CORPORATE'].includes(event.kind)) {
