@@ -58,6 +58,10 @@ const PERMISSIONS = Object.freeze({
     'report:missing:create': [USER, SUPER_ADMIN],
     'report:found:create': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN, VOLUNTEER],
     'report:manage': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN],
+
+    // Analytics dashboards (NGO admins only see their own organisation)
+    'analytics:view': [SUPER_ADMIN, AUTHORITY],
+    'analytics:ngo': [SUPER_ADMIN, NGO_ADMIN],
 });
 
 const hasPermission = (role, permission) => {

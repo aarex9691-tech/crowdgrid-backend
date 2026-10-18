@@ -14,11 +14,13 @@ const sosSchema = new mongoose.Schema(
         locationHistory: [{ _id: false, lat: Number, lng: Number, at: Date }],
         status: { type: String, enum: ['OPEN', 'ACKNOWLEDGED', 'RESOLVED'], default: 'OPEN' },
         assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        acknowledgedAt: Date, // first time staff responded (for response-time analytics)
         resolvedAt: Date,
     },
     { timestamps: true }
 );
 
 sosSchema.index({ status: 1, createdAt: -1 });
+sosSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('SosIncident', sosSchema);

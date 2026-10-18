@@ -8,7 +8,9 @@
     "dev": "node --watch server.js",
     "seed": "node scripts/seed.js",
     "test:concurrency": "node scripts/concurrency-test.js",
-    "test:flows": "node scripts/flow-test.js"
+    "test:flows": "node scripts/flow-test.js",
+    "test:unit": "node scripts/unit-test.js",
+    "simulate": "node scripts/simulate.js"
   },
   "keywords": [],
   "author": "",
@@ -24,9 +26,13 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.10.0",
     "morgan": "^1.12.1",
-    "multer": "^2.4.0"
+    "multer": "^2.4.0",
+    "socket.io": "^4.8.4"
   },
   "engines": {
     "node": ">=18.18"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
   }
 }

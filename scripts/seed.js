@@ -27,6 +27,7 @@ const LostFoundReport = require('../modules/lostfound/lostfound.model');
 const AuditLog = require('../modules/audit/audit.model');
 const Order = require('../modules/order/order.model');
 const passToken = require('../utils/passToken');
+const { buildHistory, insertHistory } = require('./demo-history');
 const { istDate, istDateTime, addDays } = require('../utils/time');
 
 const PASSWORD = 'Crowd@123';
@@ -272,7 +273,7 @@ async function main() {
     await FoodSlot.insertMany(slots);
 
     // ---------- Transit ----------
-    await TransitRoute.insertMany([
+    const routes = await TransitRoute.insertMany([
         {
             eventId: simhastha._id, name: 'E-Shuttle S1', kind: 'SHUTTLE', origin: 'Adgaon Parking', destination: 'Ramkund Ghat',
             vehicleType: 'Battery E-Rickshaw', frequencyMins: 10, firstDeparture: '04:00', lastDeparture: '23:00', fare: 0, boardingGate: 'Gate A2',
@@ -354,6 +355,13 @@ async function main() {
             lastSeenAt: 'Panchavati Karanja bus stop', contactPhone: '9000000006', reportedBy: pilgrim._id,
         },
     ]);
+
+    // ---------- Simulated history for the analytics dashboard (skip with SEED_HISTORY=0) ----------
+    if (process.env.SEED_HISTORY !== '0') {
+        console.log('Adding 14 days of simulated demo history for the analytics charts...');
+        const history = buildHistory({ event: simhastha, lodgings, centers, routes, volunteer, passwordHash }, { days: 14 });
+        console.log(`  ${await insertHistory({ User, Pass, Order, SosIncident }, history)} (demo pilgrims use phones 7000000001-7000000060)`);
+    }
 
     console.log('\nSeed complete. All demo accounts use the password:', PASSWORD);
     console.table([

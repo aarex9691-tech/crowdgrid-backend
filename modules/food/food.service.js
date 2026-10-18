@@ -5,6 +5,7 @@ const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 
 /** One token can feed a family: up to this many people per account per meal. */
 const MAX_PEOPLE_PER_TOKEN = 6;
@@ -104,6 +105,7 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
                 dedupeKey,
             }
         );
+        realtime.notify(['public', 'control', `provider:${center.providerId}`], 'meals', { slotId: String(slot._id) });
         return { message: 'Meal token issued', remaining: updated.remaining, pass: toClient(pass) };
     } catch (err) {
         await FoodSlot.updateOne({ _id: slot._id }, { $inc: { remaining: count } });

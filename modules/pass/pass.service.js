@@ -2,6 +2,7 @@ const { Pass } = require('./pass.model');
 const passToken = require('../../utils/passToken');
 const { ROLES } = require('../../config/roles');
 const { badRequest } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 const User = require('../auth/user.model');
 const audit = require('../audit/audit.service');
 
@@ -113,6 +114,8 @@ const redeem = async (pass, scanner) => {
             pass: summary(pass),
         };
     }
+    // Live update: check-in and meal counters in the control room and the NGO portal
+    realtime.notify(['control', redeemed.providerId && `provider:${redeemed.providerId}`], 'scan', { type: redeemed.type });
     return { result: 'VALID', message: 'VALID - CHECKED IN', pass: summary(redeemed) };
 };
 

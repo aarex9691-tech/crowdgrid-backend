@@ -3,6 +3,7 @@ const SosIncident = require('./sos.model');
 const { ROLES } = require('../../config/roles');
 const audit = require('../audit/audit.service');
 const { badRequest, notFound, forbidden } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 
 const num = (v) => (v === undefined || v === null || v === '' ? undefined : Number(v));
 
@@ -28,6 +29,7 @@ const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) 
         }
         if (message) recent.message = message;
         await recent.save();
+        realtime.notify(['control', 'volunteers'], 'sos', { action: 'location', id: String(recent._id) });
         return { incident: recent.toObject(), updated: true };
     }
 
@@ -39,6 +41,7 @@ const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) 
         location: hasGps ? location : undefined,
         locationHistory: hasGps ? [{ lat: location.lat, lng: location.lng, at: new Date() }] : [],
     });
+    realtime.notify(['control', 'volunteers'], 'sos', { action: 'raised', id: String(incident._id), type: incident.type });
     return { incident: incident.toObject(), updated: false };
 };
 
@@ -67,6 +70,8 @@ const update = async (id, viewer, { status, assignedTo } = {}) => {
     }
     if (status) {
         if (!['OPEN', 'ACKNOWLEDGED', 'RESOLVED'].includes(status)) throw badRequest('Invalid status');
+        // First response time is kept for the analytics dashboard
+        if (status !== 'OPEN' && !incident.acknowledgedAt) incident.acknowledgedAt = new Date();
         incident.status = status;
         incident.resolvedAt = status === 'RESOLVED' ? new Date() : undefined;
     }
@@ -79,6 +84,7 @@ const update = async (id, viewer, { status, assignedTo } = {}) => {
         targetId: incident._id,
         summary: `${viewer.name} marked an SOS alert ${incident.status.toLowerCase()}${assignedTo ? ' and assigned it' : ''}`,
     });
+    realtime.notify(['control', 'volunteers', `user:${incident.userId}`], 'sos', { action: 'updated', id: String(incident._id), status: incident.status });
     return incident.toObject();
 };
 

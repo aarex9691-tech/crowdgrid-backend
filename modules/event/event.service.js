@@ -8,6 +8,7 @@ const { issuePass, toClient } = require('../pass/pass.service');
 const { hasPermission, ROLES } = require('../../config/roles');
 const audit = require('../audit/audit.service');
 const { HttpError, badRequest, forbidden, notFound, conflict } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 const v = require('../../utils/validate');
 
 const findEvent = async (idOrSlug, projection) => {
@@ -383,6 +384,7 @@ const register = async (eventId, user, { paidByOrder = null } = {}) => {
             validUntil: event.endDate,
             dedupeKey,
         });
+        realtime.notify(['public', 'control'], 'tickets', { eventId: String(claimed._id) });
         return { message: "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
     } catch (err) {
         await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -1 } });

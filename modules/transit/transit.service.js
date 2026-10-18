@@ -4,6 +4,7 @@ const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
 const { istDate, istDateTime } = require('../../utils/time');
 const { HttpError, badRequest, notFound } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 
 const list = async (eventId) => {
     if (!mongoose.isValidObjectId(eventId)) throw badRequest('Invalid event id');
@@ -54,6 +55,7 @@ const boardingPass = async (routeId, user, { paidByOrder = null } = {}) => {
             validUntil: istDateTime(day, '23:59'),
             dedupeKey,
         });
+        realtime.notify('control', 'passes', { type: 'TRANSIT' });
         return { message: 'Boarding pass ready', pass: toClient(pass) };
     } catch (err) {
         if (err.code === 11000) return { message: 'You already have a boarding pass for today', pass: toClient(await Pass.findOne({ dedupeKey })), existing: true };

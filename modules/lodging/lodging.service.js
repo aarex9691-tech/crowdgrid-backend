@@ -8,6 +8,7 @@ const bedAlloc = require('./beds');
 const audit = require('../audit/audit.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { HttpError, badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 
 const MAX_BEDS_PER_USER = 4;
 
@@ -141,7 +142,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
 
     // 3. Write booking + pass together; give the beds back if this fails
     try {
-        return await withTransaction(async (session) => {
+        const result = await withTransaction(async (session) => {
             const [booking] = await LodgingBooking.create(
                 [{ _id: bookingId, lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, bedNos, bedLabel: where.text, ...stay }],
                 { session }
@@ -181,6 +182,8 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
                 pass: toClient(pass),
             };
         });
+        bedsChanged(lodging._id, lodging.providerId._id); // after commit, so screens re-read the new count
+        return result;
     } catch (err) {
         await bedAlloc.release(bookingId);
         await Lodging.updateOne({ _id: lodging._id }, { $inc: { availableBeds: count } });
@@ -190,7 +193,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
 
 /** Cancel a booking: flips status atomically, returns the beds, voids the pass. */
 const cancel = async (bookingId, user) => {
-    return withTransaction(async (session) => {
+    const result = await withTransaction(async (session) => {
         const booking = await LodgingBooking.findOneAndUpdate(
             { _id: bookingId, userId: user._id, status: 'CONFIRMED' },
             { $set: { status: 'CANCELLED' } },
@@ -203,7 +206,15 @@ const cancel = async (bookingId, user) => {
         audit.record({ actor: user, action: 'BOOKING_CANCELLED', targetType: 'LodgingBooking', targetId: booking._id, summary: `${user.name} cancelled a ${booking.beds}-bed booking` });
         return { message: 'Booking cancelled', booking: booking.toObject() };
     });
+    const camp = await Lodging.findById(result.booking.lodgingId, 'providerId').lean();
+    bedsChanged(result.booking.lodgingId, camp?.providerId);
+    return result;
 };
+
+/** Live update: bed counts on public pages, the camp's tent map, the NGO and the control room. */
+function bedsChanged(lodgingId, providerId) {
+    realtime.notify(['public', 'control', `lodging:${lodgingId}`, providerId && `provider:${providerId}`], 'beds', { lodgingId: String(lodgingId) });
+}
 
 const mine = async (userId) =>
     LodgingBooking.find({ userId }).populate('lodgingId', 'name sector category').sort({ createdAt: -1 }).lean();

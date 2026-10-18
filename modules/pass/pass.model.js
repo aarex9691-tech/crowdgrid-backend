@@ -38,5 +38,9 @@ const passSchema = new mongoose.Schema(
 
 passSchema.index({ dedupeKey: 1 }, { unique: true, partialFilterExpression: { dedupeKey: { $type: 'string' } } });
 passSchema.index({ userId: 1, createdAt: -1 });
+// Analytics: activity per day for an event or an NGO
+passSchema.index({ eventId: 1, createdAt: -1 });
+passSchema.index({ eventId: 1, redeemedAt: -1 }, { partialFilterExpression: { redeemedAt: { $type: 'date' } } });
+passSchema.index({ providerId: 1, redeemedAt: -1 }, { partialFilterExpression: { redeemedAt: { $type: 'date' } } });
 
 module.exports = { Pass: mongoose.model('Pass', passSchema), PASS_TYPES };

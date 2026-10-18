@@ -62,4 +62,4 @@ const requirePermission = (permission) => (req, res, next) => {
     next();
 };
 
-module.exports = { requireAuth, optionalAuth, requirePermission };
+module.exports = { requireAuth, optionalAuth, requirePermission, loadUser };

@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const http = require('http');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -9,6 +10,8 @@ const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/db');
 const sanitize = require('./middleware/sanitize');
 const { notFoundHandler, errorHandler } = require('./middleware/errors');
+const realtime = require('./utils/realtime');
+const { loadUser } = require('./middleware/auth');
 
 for (const key of ['MONGO_URI', 'JWT_SECRET']) {
     if (!process.env[key]) {
@@ -17,12 +20,13 @@ for (const key of ['MONGO_URI', 'JWT_SECRET']) {
     }
 }
 
+const ORIGINS = (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((s) => s.trim());
 const app = express();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(
     cors({
-        origin: (process.env.CLIENT_ORIGIN || 'http://localhost:5173').split(',').map((s) => s.trim()),
+        origin: ORIGINS,
         credentials: true,
     })
 );
@@ -57,6 +61,7 @@ app.use('/api/lost-found', require('./modules/lostfound/lostfound.routes'));
 app.use('/api/ngo', require('./modules/ngo/ngo.routes'));
 app.use('/api/admin', require('./modules/admin/admin.routes'));
 app.use('/api/orders', require('./modules/order/order.routes'));
+app.use('/api/analytics', require('./modules/analytics/analytics.routes'));
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -64,7 +69,10 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 if (require.main === module) {
-    connectDB().then(() => app.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT}`)));
+    // One HTTP server carries both the REST API and the live-update WebSocket
+    const server = http.createServer(app);
+    realtime.init(server, { origins: ORIGINS, authenticate: loadUser });
+    connectDB().then(() => server.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT} (live updates on)`)));
 }
 
 module.exports = app;

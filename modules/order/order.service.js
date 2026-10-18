@@ -8,6 +8,7 @@ const { Pass } = require('../pass/pass.model');
 const { toClient } = require('../pass/pass.service');
 const audit = require('../audit/audit.service');
 const { HttpError, badRequest, notFound, conflict } = require('../../utils/httpError');
+const realtime = require('../../utils/realtime');
 
 const MAX_ITEMS = 10;
 
@@ -137,6 +138,7 @@ const pay = async (orderId, user, body = {}) => {
         targetId: locked._id,
         summary: `${user.name} paid ₹${locked.total} (${method}, ${result.reference})${locked.refunded ? `, ₹${locked.refunded} refunded` : ''}`,
     });
+    realtime.notify('control', 'sales', { orderId: String(locked._id) });
     const passes = await Pass.find({ _id: { $in: locked.items.map((i) => i.passId).filter(Boolean) } });
     return toView(locked, passes);
 };

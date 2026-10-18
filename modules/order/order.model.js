@@ -43,5 +43,6 @@ const orderSchema = new mongoose.Schema(
 );
 
 orderSchema.index({ userId: 1, createdAt: -1 });
+orderSchema.index({ status: 1, 'payment.paidAt': -1 }); // analytics: revenue per day
 
 module.exports = mongoose.model('Order', orderSchema);
