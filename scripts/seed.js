@@ -21,6 +21,8 @@ const { BedAssignment } = require('../modules/lodging/beds');
 const { FoodCenter, FoodSlot, MEALS } = require('../modules/food/food.model');
 const { Pass } = require('../modules/pass/pass.model');
 const TransitRoute = require('../modules/transit/transit.model');
+const { LaneStatus } = require('../modules/route/lane.model');
+const { SEED_STATUS } = require('../modules/route/network.nashik');
 const { VolunteerApplication } = require('../modules/volunteer/volunteer.model');
 const SosIncident = require('../modules/sos/sos.model');
 const LostFoundReport = require('../modules/lostfound/lostfound.model');
@@ -47,7 +49,7 @@ async function main() {
     await mongoose.connect(process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog, Order];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog, Order, LaneStatus];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
@@ -314,6 +316,9 @@ async function main() {
             ],
         },
     ]);
+
+    // ---------- Walking lanes the control room has already marked (safest route) ----------
+    await LaneStatus.insertMany(SEED_STATUS.map((l) => ({ ...l, eventId: simhastha._id, updatedBy: authority._id })));
 
     // ---------- Volunteers ----------
     const approvedApp = await VolunteerApplication.create({

@@ -42,6 +42,7 @@ const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) 
         locationHistory: hasGps ? [{ lat: location.lat, lng: location.lng, at: new Date() }] : [],
     });
     realtime.notify(['control', 'volunteers'], 'sos', { action: 'raised', id: String(incident._id), type: incident.type });
+    if (hasGps) realtime.notify(['public'], 'route', {}); // open route maps re-plan around the alert
     return { incident: incident.toObject(), updated: false };
 };
 
@@ -85,6 +86,7 @@ const update = async (id, viewer, { status, assignedTo } = {}) => {
         summary: `${viewer.name} marked an SOS alert ${incident.status.toLowerCase()}${assignedTo ? ' and assigned it' : ''}`,
     });
     realtime.notify(['control', 'volunteers', `user:${incident.userId}`], 'sos', { action: 'updated', id: String(incident._id), status: incident.status });
+    if (incident.location?.lat !== undefined) realtime.notify(['public'], 'route', {});
     return incident.toObject();
 };
 

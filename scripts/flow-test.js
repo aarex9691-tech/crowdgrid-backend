@@ -45,6 +45,7 @@ async function main() {
     const PHONE = '6999999990';
     await User.deleteMany({ phone: PHONE });
     let me;
+    let savedLane; // lane status changed by the route checks, put back afterwards
     let hostedId;
     let freeId;
     try {
@@ -182,7 +183,32 @@ async function main() {
             const ngo = await analytics.ngoOverview({ ...ngoAdmin, id: String(ngoAdmin._id) }, { days: 7 });
             check('NGO analytics shows only their own camps', ngo.camps.length > 0 && ngo.daily.length === 7);
         }
+
+        // ---- 10. Safest route to a ghat ----
+        const route = require('../modules/route/route.service');
+        const { LaneStatus } = require('../modules/route/lane.model');
+        const net = await route.network({});
+        check('Route network loads with the seeded lane statuses', net.nodes.length > 20 && net.lanes.find((l) => l.id === 'procession-route')?.manualStatus === 'CROWDED');
+        const plan1 = await route.plan({ from: 'tent-city-a', to: 'ramkund' });
+        check('Safest route avoids the crowded procession route', plan1.reachable && !plan1.safest.lanes.some((l) => l.id === 'procession-route') && plan1.algorithms.sameCost, `${plan1.safest.distanceM} m, ${plan1.safest.minutes} min; A* ${plan1.algorithms.astar.visited} vs Dijkstra ${plan1.algorithms.dijkstra.visited} junctions`);
+        const controlRoom = await User.findOne({ phone: '9000000002' }).lean();
+        savedLane = await LaneStatus.findOne({ laneId: 'ashram-sardar' }).lean();
+        await route.setLane(controlRoom, 'ashram-sardar', { status: 'CLOSED', note: 'Flow test' });
+        const plan2 = await route.plan({ from: 'tent-city-a', to: 'ramkund' });
+        check('Closing a lane changes the safest route straight away', !plan2.safest.lanes.some((l) => l.id === 'ashram-sardar'), plan2.safest.lanes.map((l) => l.name).join(' > '));
+        await expectError('Unknown lane is refused', () => route.setLane(controlRoom, 'no-such-lane', { status: 'BUSY' }), 404);
+        await expectError('Unknown lane status is refused', () => route.setLane(controlRoom, 'ashram-sardar', { status: 'JAMMED' }), 400);
+        await expectError('Route to something that is not a ghat is refused', () => route.plan({ from: 'tent-city-a', to: 'sardar-chowk' }), 400);
+        await expectError('"Use my location" far from Nashik is refused', () => route.plan({ from: 'here', lat: '19.07', lng: '72.87', to: 'ramkund' }), 400, /too far/);
+        const here = await route.plan({ from: 'here', lat: '20.0088', lng: '73.7956', to: 'ramkund' });
+        check('"Use my location" starts from the nearest junction', here.from.id === 'tent-city-a', `${here.from.name}, ${here.from.snappedM} m away`);
+        check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
     } finally {
+        if (savedLane !== undefined) {
+            const { LaneStatus } = require('../modules/route/lane.model');
+            if (savedLane) await LaneStatus.replaceOne({ _id: savedLane._id }, savedLane);
+            else await LaneStatus.deleteOne({ laneId: 'ashram-sardar' });
+        }
         if (me) {
             const myBookings = await LodgingBooking.find({ userId: me._id, status: 'CONFIRMED' }).lean();
             for (const bk of myBookings) await lodging.cancel(bk._id, { ...me });
