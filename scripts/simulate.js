@@ -1,8 +1,11 @@
 /**
  * Live demo simulator: makes the dashboard and control room move during a presentation.
  *
- *   npm run simulate                      (backend must be running: npm run dev)
- *   API_URL=http://localhost:5000 SIM_INTERVAL=4 npm run simulate
+ *   npm run simulate                 one action about every 10 s (backend must be running: npm run dev)
+ *   npm run simulate -- slow         about every 20 s, calm for a presentation
+ *   npm run simulate -- fast         about every 4 s
+ *   npm run simulate -- 15           about every 15 s (any number of seconds, 2 or more)
+ *   SOS alerts are kept rare: at most one every 2 minutes (1 every ~1 min with "fast").
  *
  * It behaves like real people using the real API (no shortcuts into the
  * database): demo pilgrims book free camp beds, claim meal tokens and bus
@@ -16,7 +19,11 @@ require('dotenv').config();
 const { istDate, addDays } = require('../utils/time');
 
 const API = (process.env.API_URL || `http://localhost:${process.env.PORT || 5000}`).replace(/\/$/, '') + '/api';
-const INTERVAL = Math.max(2, Number(process.env.SIM_INTERVAL || 4)) * 1000;
+const SPEEDS = { slow: 20, normal: 10, fast: 4 };
+const speedArg = String(process.argv[2] || process.env.SIM_INTERVAL || 'normal').toLowerCase();
+const INTERVAL = Math.max(2, Number(SPEEDS[speedArg] ?? speedArg) || SPEEDS.normal) * 1000;
+const SOS_GAP = INTERVAL <= 4000 ? 60000 : 120000; // never flood the control room with alerts
+let lastSos = Date.now() - SOS_GAP / 2; // first SOS comes after about a minute
 const PASSWORD = process.env.SIM_PASSWORD || 'Crowd@123';
 const PILGRIMS = 15; // logins are rate limited, so a small group is reused
 
@@ -46,7 +53,7 @@ const login = async (phone) => {
 };
 
 async function main() {
-    log('▶', `Simulator using ${API}, one action every ${INTERVAL / 1000}s. Ctrl+C to stop.`);
+    log('▶', `Simulator using ${API}, one action about every ${INTERVAL / 1000}s. Ctrl+C to stop.`);
     const authority = await login('9000000002');
     const volunteer = await login('9000000005');
     const pilgrims = [];
@@ -136,13 +143,17 @@ async function main() {
     });
     while (!stopping) {
         let r = Math.random() * total;
-        const [name] = weights.find(([, w]) => (r -= w) < 0) || weights[0];
+        let [name] = weights.find(([, w]) => (r -= w) < 0) || weights[0];
+        if (name === 'sos') {
+            if (Date.now() - lastSos < SOS_GAP) name = 'meal';
+            else lastSos = Date.now();
+        }
         try {
             await actions[name]();
         } catch (e) {
             log('…', `${name}: ${e.message}`); // limits are expected, e.g. "1 token per meal"
         }
-        await sleep(INTERVAL);
+        await sleep(INTERVAL * (0.7 + Math.random() * 0.6)); // uneven gaps feel like real people
     }
 }
 
