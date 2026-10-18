@@ -160,9 +160,17 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         await check('Demo history: nothing happens in the future, everything is inside the 14 days', () => {
             const first = istDateTime(a.lastDays(14, '2026-10-18')[0], '00:00').getTime() - 864e5; // bookings may be made the day before
             for (const p of h.passes) {
+                assert.ok(p.createdAt <= now, 'created in the future');
+                if (p.status === 'ACTIVE') {
+                    // today's bookings for tomorrow's check-in: not used yet
+                    assert.equal(p.type, 'LODGING');
+                    assert.ok(p.validFrom > now && !p.redeemedAt);
+                    continue;
+                }
                 assert.ok(p.redeemedAt <= now && p.createdAt <= p.redeemedAt, 'pass times');
                 assert.ok(p.redeemedAt.getTime() >= first);
             }
+            for (const o of h.orders) assert.ok(o.payment.paidAt <= now, 'paid in the future');
             for (const s of h.sos) assert.ok(s.createdAt < s.acknowledgedAt && s.acknowledgedAt < s.resolvedAt && s.resolvedAt <= new Date(now.getTime() + 3600e3));
         });
         await check('Demo history: demo pilgrims are clearly labelled (70000000xx, "Demo Pilgrim")', () => {
@@ -175,6 +183,7 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
             const dailyH = a.buildDaily({ days: days14, issued: passes, redeemed: passes, orders: h.orders, sos: h.sos });
             assert.ok(dailyH.every((d) => d.scans > 0), 'a day without scans');
             assert.ok(dailyH.slice(0, -1).every((d) => d.revenue > 0), 'a past day without revenue');
+            assert.ok(dailyH[13].lodging > 0, 'no bed bookings today (for tomorrow)');
             const mealsH = a.buildMeals({ days: days14, redeemed: passes });
             assert.ok(mealsH.slice(0, -1).every((d) => d.BREAKFAST && d.LUNCH && d.DINNER));
             assert.ok(mealsH[13].DINNER === 0, 'dinner at 16:40 today has not happened yet');

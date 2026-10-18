@@ -57,10 +57,13 @@ const buildHistory = (ctx, { days = 14, now = new Date(), seed = 2027 } = {}) =>
         _id: oid(), type, userId: user._id, eventId: ctx.event._id, nonce: crypto.randomUUID(), singleUse: true, ...extra,
     });
 
-    for (let d = days - 1; d >= 0; d--) {
+    // d = -1 is tomorrow: only the bookings made today for tomorrow's check-in
+    for (let d = days - 1; d >= -1; d--) {
         const date = addDays(today, -d);
+        const isTomorrow = d === -1;
         const isToday = d === 0;
-        const nowMin = isToday ? Math.floor((now - istDateTime(date, '00:00')) / 60000) : 24 * 60;
+        const nowMin = isToday ? Math.floor((now - istDateTime(date, '00:00')) / 60000) : isTomorrow ? -1 : 24 * 60;
+        const todayMin = Math.floor((now - istDateTime(today, '00:00')) / 60000);
         // Crowds grow as Dhwajarohan gets closer; weekends are busier
         const weekday = new Date(istDateTime(date, '12:00')).getUTCDay(); // 0 = Sunday
         const busy = (1 + (days - d) / days) * (weekday === 0 || weekday === 6 ? 1.35 : 1);
@@ -71,14 +74,16 @@ const buildHistory = (ctx, { days = 14, now = new Date(), seed = 2027 } = {}) =>
             const l = pick(ctx.lodgings);
             const user = pick(users);
             const scanMin = between(9 * 60, 21 * 60);
-            if (!happened(scanMin)) continue;
-            const bookedAt = at(addDays(date, -1), between(8 * 60, 22 * 60));
+            const bookMin = between(8 * 60, 22 * 60);
+            // Tomorrow's stays: booked today (only up to now), not checked in yet
+            if (isTomorrow ? bookMin > todayMin : !happened(scanMin)) continue;
+            const bookedAt = at(addDays(date, -1), bookMin);
             const beds = between(1, 4);
             const p = base('LODGING', user, {
                 providerId: l.providerId, refId: l._id, title: l.name, subtitle: l.sector,
                 details: { sector: l.sector, beds, checkIn: date, checkOut: addDays(date, 2), demo: true },
-                status: 'REDEEMED', validFrom: istDateTime(date, '00:00'), validUntil: istDateTime(addDays(date, 2), '23:59'),
-                createdAt: bookedAt, redeemedAt: at(date, scanMin), redeemedBy: ctx.volunteer._id,
+                validFrom: istDateTime(date, '00:00'), validUntil: istDateTime(addDays(date, 2), '23:59'), createdAt: bookedAt,
+                ...(isTomorrow ? { status: 'ACTIVE' } : { status: 'REDEEMED', redeemedAt: at(date, scanMin), redeemedBy: ctx.volunteer._id }),
             });
             passes.push(p);
             if (l.pricePerNight > 0) {

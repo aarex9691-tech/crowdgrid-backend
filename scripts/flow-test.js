@@ -167,6 +167,21 @@ async function main() {
         await passes.myQr(user, { reset: true });
         const r3 = await passes.scan(qr, scanner, { service: 'LODGING' });
         check('Old personal QR stops working after reset', r3.result === 'REJECTED' && r3.reason === 'REVOKED');
+
+        // ---- 9. Analytics dashboard (reads the seeded demo history) ----
+        const analytics = require('../modules/analytics/analytics.service');
+        const ov = await analytics.overview({ days: 14 });
+        const totalPasses = ov.daily.reduce((s, d) => s + d.lodging + d.meals + d.transit, 0);
+        check('Analytics overview covers 14 days with activity', ov.days.length === 14 && ov.daily.length === 14 && totalPasses > 0, `${totalPasses} passes`);
+        check('Analytics bed numbers add up', ov.kpis.bedsTotal > 0 && ov.kpis.bedsFree <= ov.kpis.bedsTotal && ov.kpis.occupancyPct >= 0 && ov.kpis.occupancyPct <= 100, `${ov.kpis.occupancyPct}%`);
+        check('Analytics heat map is 7 days x 24 hours', ov.heatmap.grid.length === 7 && ov.heatmap.grid.every((r) => r.length === 24));
+        const csv = await analytics.exportCsv({ days: 7, report: 'daily' });
+        check('CSV export has a header and one row per day', csv.body.replace(/^\uFEFF/, '').trim().split(/\r?\n/).length === 8, csv.filename);
+        const ngoAdmin = await User.findOne({ role: 'NGO_ADMIN' }).lean();
+        if (ngoAdmin) {
+            const ngo = await analytics.ngoOverview({ ...ngoAdmin, id: String(ngoAdmin._id) }, { days: 7 });
+            check('NGO analytics shows only their own camps', ngo.camps.length > 0 && ngo.daily.length === 7);
+        }
     } finally {
         if (me) {
             const myBookings = await LodgingBooking.find({ userId: me._id, status: 'CONFIRMED' }).lean();
