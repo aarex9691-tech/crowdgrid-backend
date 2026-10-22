@@ -10,6 +10,7 @@
  * so every flow can be demonstrated live.
  */
 require('dotenv').config();
+require('../utils/dns'); // optional DNS_SERVERS override for Atlas
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 

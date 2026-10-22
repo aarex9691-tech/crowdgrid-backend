@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('./utils/dns'); // optional DNS_SERVERS override for Atlas (querySrv errors)
 
 const http = require('http');
 const path = require('path');

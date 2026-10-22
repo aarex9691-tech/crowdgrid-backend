@@ -6,6 +6,7 @@
  * buses). It creates its own test pilgrim and deletes everything it made.
  */
 require('dotenv').config();
+require('../utils/dns'); // optional DNS_SERVERS override for Atlas
 const mongoose = require('mongoose');
 const User = require('../modules/auth/user.model');
 const Event = require('../modules/event/event.model');
