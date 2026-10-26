@@ -32,8 +32,9 @@ const roomsFor = (user) => {
  * Attach Socket.IO to the HTTP server. `authenticate(token)` returns the user
  * or throws; visitors without a token are allowed but only join "public".
  */
-const init = (httpServer, { origins = [], authenticate } = {}) => {
-    io = new Server(httpServer, { cors: { origin: origins, credentials: true }, serveClient: false });
+const init = (httpServer, { origins = [], origin, authenticate } = {}) => {
+    const corsOrigin = origin || origins;
+    io = new Server(httpServer, { cors: { origin: corsOrigin, credentials: true }, serveClient: false });
     io.use(async (socket, next) => {
         const token = socket.handshake.auth?.token;
         socket.data.user = null;

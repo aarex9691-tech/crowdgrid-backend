@@ -62,6 +62,9 @@ const PERMISSIONS = Object.freeze({
     // Analytics dashboards (NGO admins only see their own organisation)
     'analytics:view': [SUPER_ADMIN, AUTHORITY],
     'analytics:ngo': [SUPER_ADMIN, NGO_ADMIN],
+
+    // Mark walking lanes busy / crowded / closed (safest route to the ghat)
+    'route:manage': [SUPER_ADMIN, AUTHORITY],
 });
 
 const hasPermission = (role, permission) => {

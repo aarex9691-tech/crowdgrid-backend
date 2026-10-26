@@ -9,6 +9,7 @@
  * Everything it creates is tagged and deleted at the end.
  */
 require('dotenv').config();
+require('../utils/dns'); // optional DNS_SERVERS override for Atlas
 const mongoose = require('mongoose');
 const User = require('../modules/auth/user.model');
 const Event = require('../modules/event/event.model');

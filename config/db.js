@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { atlasHint } = require('../utils/dns');
 const { detectTransactionSupport } = require('../utils/tx');
 
 const connectDB = async () => {
@@ -14,6 +15,8 @@ const connectDB = async () => {
         return conn;
     } catch (error) {
         console.error(`Database connection error: ${error.message}`);
+        const hint = atlasHint(error.message);
+        if (hint) console.error(hint);
         process.exit(1);
     }
 };

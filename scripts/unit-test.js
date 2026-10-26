@@ -4,6 +4,7 @@
  *   - CSV export (quoting, formula-injection guard)
  *   - live updates: real Socket.IO server and clients, rooms per role
  *   - shared input rules (utils/validate.js)
+ *   - safest route: min-heap, Dijkstra, A*, crowd and closure rules
  */
 const assert = require('node:assert/strict');
 const http = require('http');
@@ -12,6 +13,10 @@ const a = require('../modules/analytics/analytics.service');
 const realtime = require('../utils/realtime');
 const v = require('../utils/validate');
 const { istDateTime, istDate } = require('../utils/time');
+const MinHeap = require('../utils/minHeap');
+const pf = require('../modules/route/pathfinding');
+const rs = require('../modules/route/route.service');
+const { NODES, LANES, SEED_STATUS } = require('../modules/route/network.nashik');
 
 let failed = 0;
 let passed = 0;
@@ -296,6 +301,101 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.throws(() => v.pincode('022001'), /cannot start with 0/);
         assert.deepEqual(v.mobile('44', '7700 900123', 'Contact'), { countryCode: '44', phone: '7700900123' });
         assert.throws(() => v.mobile('91', '5876543210', 'Contact'), /start with 6, 7, 8 or 9/);
+    });
+
+    // ---------------------------------------------------------------- safest route (DSA)
+    await check('Min-heap pops in priority order (1,000 random items)', () => {
+        const h = new MinHeap();
+        const xs = Array.from({ length: 1000 }, () => Math.floor(Math.random() * 10000));
+        xs.forEach((x) => h.push(x, x));
+        const out = [];
+        while (!h.isEmpty()) out.push(h.pop().priority);
+        assert.deepEqual(out, [...xs].sort((p, q) => p - q));
+        assert.equal(h.pop(), undefined);
+    });
+
+    // Small textbook graph: A-B 4, A-C 1, C-B 2, B-D 1, C-D 5  -> best A-C-B-D = 4
+    const toy = (() => {
+        const nodes = ['A', 'B', 'C', 'D'].map((id, i) => ({ id, lat: 20, lng: 73 + i * 1e-9 }));
+        const edges = [['ab', 'A', 'B', 4], ['ac', 'A', 'C', 1], ['cb', 'C', 'B', 2], ['bd', 'B', 'D', 1], ['cd', 'C', 'D', 5]].map(([id, a, b, w]) => ({ id, a, b, lengthM: w }));
+        return { nodes, edges, adj: pf.buildAdjacency(nodes, edges) };
+    })();
+    await check('Dijkstra finds the cheapest path, not the fewest hops', () => {
+        const r = pf.dijkstra(toy, 'A', 'D', (e) => e.lengthM);
+        assert.equal(r.cost, 4);
+        assert.deepEqual(r.nodes, ['A', 'C', 'B', 'D']);
+    });
+    await check('A closed lane (Infinity) is never used; no path gives found = false', () => {
+        const r = pf.dijkstra(toy, 'A', 'D', (e) => (e.id === 'bd' ? Infinity : e.lengthM));
+        assert.deepEqual(r.nodes, ['A', 'C', 'D']);
+        const none = pf.dijkstra(toy, 'A', 'D', (e) => (['bd', 'cd'].includes(e.id) ? Infinity : e.lengthM));
+        assert.equal(none.found, false);
+    });
+    await check('Network data: every lane joins known junctions, graph is connected', () => {
+        const ids = new Set(NODES.map((n) => n.id));
+        LANES.forEach(([id, a, b]) => assert.ok(ids.has(a) && ids.has(b), id));
+        assert.equal(new Set(LANES.map((l) => l[0])).size, LANES.length, 'lane ids are unique');
+        const r = pf.dijkstra(rs.GRAPH, 'ramkund', 'kapila', (e) => e.lengthM);
+        assert.ok(r.found);
+        for (const n of NODES) assert.ok(pf.dijkstra(rs.GRAPH, n.id, 'ramkund', (e) => e.lengthM).found, `${n.id} can reach Ramkund`);
+    });
+    await check('A* gives the same cost as Dijkstra for every start and ghat, checking no more junctions', () => {
+        const cond = rs.laneConditions({ manual: new Map(SEED_STATUS.map((x) => [x.laneId, x])) });
+        let fewer = 0;
+        for (const from of NODES) {
+            for (const to of NODES.filter((n) => n.type === 'GHAT' && n.id !== from.id)) {
+                const p = rs.planOn(cond, from.id, to.id);
+                assert.ok(p.algorithms.sameCost, `${from.id} -> ${to.id}`);
+                assert.ok(p.algorithms.astar.visited <= p.algorithms.dijkstra.visited, `${from.id} -> ${to.id}`);
+                if (p.algorithms.astar.visited < p.algorithms.dijkstra.visited) fewer++;
+            }
+        }
+        assert.ok(fewer > 20, `A* was faster on ${fewer} routes`);
+    });
+    await check('Safest route avoids the crowded procession route; shortest goes through it', () => {
+        const cond = rs.laneConditions({ manual: new Map(SEED_STATUS.map((x) => [x.laneId, x])) });
+        const p = rs.planOn(cond, 'tent-city-a', 'ramkund');
+        assert.ok(p.shortest.lanes.some((l) => l.id === 'procession-route'));
+        assert.ok(!p.safest.lanes.some((l) => l.id === 'procession-route'));
+        assert.equal(p.same, false);
+        assert.deepEqual(p.avoided.map((l) => l.id), ['procession-route']);
+        assert.ok(p.safest.distanceM > p.shortest.distanceM && p.safest.minutes < p.shortest.minutes, 'a little longer but quicker on foot');
+    });
+    await check('Closing a lane re-routes both shortest and safest', () => {
+        const cond = rs.laneConditions({ manual: new Map([['ramkund-gate-lane', { status: 'CLOSED' }], ['procession-route', { status: 'CLOSED' }]]) });
+        const p = rs.planOn(cond, 'tent-city-a', 'ramkund');
+        for (const r of [p.shortest, p.safest]) assert.ok(!r.lanes.some((l) => ['ramkund-gate-lane', 'procession-route'].includes(l.id)));
+    });
+    await check('Unreachable ghat is reported, not crashed', () => {
+        const cond = rs.laneConditions({ manual: new Map([['holkar-bridge', { status: 'CLOSED' }]]) });
+        const p = rs.planOn(cond, 'raviwar-karanja', 'ramkund');
+        assert.equal(p.reachable, false);
+        assert.equal(p.safest, null);
+    });
+    await check('Crowd SOS near a lane makes it crowded; far away does nothing', () => {
+        const near = rs.laneConditions({ sos: [{ type: 'CROWD', location: { lat: 20.0063, lng: 73.7908 } }] });
+        assert.equal(near.get('langar-lane').status, 'CROWDED');
+        assert.match(near.get('langar-lane').reasons.join(), /Crowd SOS/);
+        const far = rs.laneConditions({ sos: [{ type: 'CROWD', location: { lat: 19.95, lng: 73.84 } }] });
+        assert.ok([...far.values()].every((c) => c.status === 'NORMAL'));
+        const medical = rs.laneConditions({ sos: [{ type: 'MEDICAL', location: { lat: 20.0063, lng: 73.7908 } }] });
+        assert.notEqual(medical.get('langar-lane').status, 'CROWDED');
+    });
+    await check('Many check-ins at a camp make its lanes busy, then crowded', () => {
+        const busy = rs.laneConditions({ scans: new Map([['Godavari Langar', 20]]) });
+        assert.equal(busy.get('langar-lane').status, 'BUSY');
+        const crowded = rs.laneConditions({ scans: new Map([['Godavari Langar', 60]]) });
+        assert.equal(crowded.get('sardar-langar').status, 'CROWDED');
+        assert.equal(crowded.get('ramkund-steps').status, 'NORMAL');
+    });
+    await check('Auto signals never re-open a closed lane; distance to lane is right', () => {
+        const c = rs.laneConditions({ manual: new Map([['langar-lane', { status: 'CLOSED' }]]), sos: [{ type: 'CROWD', location: { lat: 20.0066, lng: 73.791 } }] });
+        assert.equal(c.get('langar-lane').status, 'CLOSED');
+        const a = { lat: 20, lng: 73 };
+        const b = { lat: 20, lng: 73.001 };
+        assert.ok(Math.abs(rs.distanceToLane({ lat: 20.0009, lng: 73.0005 }, a, b) - 100) < 1);
+        assert.ok(rs.distanceToLane(a, a, b) < 0.001);
+        assert.equal(rs.nearestNode({ lat: 20.006, lng: 73.7898 }).node.id, 'ramkund');
     });
 
     console.log(`\n${passed} passed, ${failed} failed (today in IST: ${istDate()})`);
