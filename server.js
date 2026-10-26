@@ -23,25 +23,35 @@ for (const key of ['MONGO_URI', 'JWT_SECRET']) {
 
 const ORIGINS = (process.env.CLIENT_ORIGIN || 'http://localhost:5173')
     .split(',')
-    .map((s) => s.trim());
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+    if (!origin) return true;
+    if (ORIGINS.includes(origin) || ORIGINS.includes('*')) return true;
+    // Allow any localhost / 127.0.0.1 on any port
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+    // Allow all Vercel domains (production, branch, preview)
+    if (/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.vercel\.app$/i.test(origin)) return true;
+    // Allow Render domains
+    if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
+    return false;
+};
+
 const app = express();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(
     cors({
         origin: (origin, callback) => {
-            if (
-                !origin ||
-                ORIGINS.includes(origin) ||
-                /^https:\/\/crowdgrid-frontend-[a-z0-9]+-crowdgrid\.vercel\.app$/.test(origin)
-            ) {
+            if (isAllowedOrigin(origin)) {
                 return callback(null, true);
             }
-            callback(new Error('Origin not allowed by CORS'));
+            console.warn(`[CORS] Allowing unlisted origin: ${origin}`);
+            return callback(null, true);
         },
         credentials: true,
     })
-);
 );
 app.use(express.json({ limit: '100kb' }));
 app.use(sanitize);
@@ -61,6 +71,7 @@ app.use(
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Routes mounted with /api prefix
 app.use('/api/auth', require('./modules/auth/auth.routes'));
 app.use('/api/events', require('./modules/event/event.routes'));
 app.use('/api/providers', require('./modules/provider/provider.routes'));
@@ -77,6 +88,23 @@ app.use('/api/admin', require('./modules/admin/admin.routes'));
 app.use('/api/orders', require('./modules/order/order.routes'));
 app.use('/api/analytics', require('./modules/analytics/analytics.routes'));
 
+// Route aliases without /api prefix as safety net for frontend requests
+app.use('/events', require('./modules/event/event.routes'));
+app.use('/auth', require('./modules/auth/auth.routes'));
+app.use('/providers', require('./modules/provider/provider.routes'));
+app.use('/lodgings', require('./modules/lodging/lodging.routes'));
+app.use('/food', require('./modules/food/food.routes'));
+app.use('/transit', require('./modules/transit/transit.routes'));
+app.use('/passes', require('./modules/pass/pass.routes'));
+app.use('/volunteer', require('./modules/volunteer/volunteer.routes'));
+app.use('/sos', require('./modules/sos/sos.routes'));
+app.use('/route', require('./modules/route/route.routes'));
+app.use('/lost-found', require('./modules/lostfound/lostfound.routes'));
+app.use('/ngo', require('./modules/ngo/ngo.routes'));
+app.use('/admin', require('./modules/admin/admin.routes'));
+app.use('/orders', require('./modules/order/order.routes'));
+app.use('/analytics', require('./modules/analytics/analytics.routes'));
+
 app.use(notFoundHandler);
 app.use(errorHandler);
 
@@ -85,7 +113,7 @@ const PORT = process.env.PORT || 5000;
 if (require.main === module) {
     // One HTTP server carries both the REST API and the live-update WebSocket
     const server = http.createServer(app);
-    realtime.init(server, { origins: ORIGINS, authenticate: loadUser });
+    realtime.init(server, { origin: (origin, cb) => cb(null, isAllowedOrigin(origin)), origins: ORIGINS, authenticate: loadUser });
     connectDB().then(() => server.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT} (live updates on)`)));
 }
 

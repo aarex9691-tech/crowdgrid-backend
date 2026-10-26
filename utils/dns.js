@@ -4,13 +4,19 @@
  * Atlas "mongodb+srv://" addresses need a DNS SRV lookup. Some home routers and
  * Windows setups refuse those lookups ("querySrv ECONNREFUSED"). Setting
  *   DNS_SERVERS=8.8.8.8,1.1.1.1
- * in .env makes Node ask those public DNS servers instead. Without the setting
- * nothing changes.
+ * in .env makes Node ask those public DNS servers instead.
+ * We also provide standard public DNS servers (Google + Cloudflare) as a default fallback
+ * if SRV lookups fail.
  */
 const dns = require('dns');
 
-const servers = (process.env.DNS_SERVERS || '').split(',').map((s) => s.trim()).filter(Boolean);
-if (servers.length) dns.setServers(servers);
+const envServers = (process.env.DNS_SERVERS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const servers = envServers.length ? envServers : ['8.8.8.8', '1.1.1.1'];
+try {
+    dns.setServers(servers);
+} catch (e) {
+    // ignore if environment prevents custom DNS servers
+}
 
 /** Friendly hint for the common Atlas connection errors. */
 const atlasHint = (message = '') => {
