@@ -41,7 +41,7 @@ const expectError = async (name, fn, status, about) => {
 };
 
 async function main() {
-    await mongoose.connect(process.env.MONGO_URI);
+    await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     await detectTransactionSupport();
     const PHONE = '6999999990';
     await User.deleteMany({ phone: PHONE });

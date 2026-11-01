@@ -47,7 +47,7 @@ const SECTORS = {
 async function main() {
     if (!process.env.MONGO_URI) throw new Error('MONGO_URI missing in .env');
     if (process.env.NODE_ENV === 'production') throw new Error('Refusing to seed a production database');
-    await mongoose.connect(process.env.MONGO_URI);
+    await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
     const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog, Order, LaneStatus];

@@ -47,8 +47,8 @@ app.use(
             if (isAllowedOrigin(origin)) {
                 return callback(null, true);
             }
-            console.warn(`[CORS] Allowing unlisted origin: ${origin}`);
-            return callback(null, true);
+            console.warn(`[CORS] Blocked origin: ${origin} (add it to CLIENT_ORIGIN in .env)`);
+            return callback(null, false);
         },
         credentials: true,
     })
@@ -57,16 +57,14 @@ app.use(express.json({ limit: '100kb' }));
 app.use(sanitize);
 if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
 
-app.use(
-    '/api',
-    rateLimit({
-        windowMs: 15 * 60 * 1000,
-        limit: 2000,
-        standardHeaders: true,
-        legacyHeaders: false,
-        message: { message: 'Too many requests. Please wait a few minutes and try again.' },
-    })
-);
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 2000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Too many requests. Please wait a few minutes and try again.' },
+});
+app.use('/api', apiLimiter);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -88,22 +86,22 @@ app.use('/api/admin', require('./modules/admin/admin.routes'));
 app.use('/api/orders', require('./modules/order/order.routes'));
 app.use('/api/analytics', require('./modules/analytics/analytics.routes'));
 
-// Route aliases without /api prefix as safety net for frontend requests
-app.use('/events', require('./modules/event/event.routes'));
-app.use('/auth', require('./modules/auth/auth.routes'));
-app.use('/providers', require('./modules/provider/provider.routes'));
-app.use('/lodgings', require('./modules/lodging/lodging.routes'));
-app.use('/food', require('./modules/food/food.routes'));
-app.use('/transit', require('./modules/transit/transit.routes'));
-app.use('/passes', require('./modules/pass/pass.routes'));
-app.use('/volunteer', require('./modules/volunteer/volunteer.routes'));
-app.use('/sos', require('./modules/sos/sos.routes'));
-app.use('/route', require('./modules/route/route.routes'));
-app.use('/lost-found', require('./modules/lostfound/lostfound.routes'));
-app.use('/ngo', require('./modules/ngo/ngo.routes'));
-app.use('/admin', require('./modules/admin/admin.routes'));
-app.use('/orders', require('./modules/order/order.routes'));
-app.use('/analytics', require('./modules/analytics/analytics.routes'));
+// Route aliases without the /api prefix (safety net for older frontend builds); same rate limit as /api
+app.use('/events', apiLimiter, require('./modules/event/event.routes'));
+app.use('/auth', apiLimiter, require('./modules/auth/auth.routes'));
+app.use('/providers', apiLimiter, require('./modules/provider/provider.routes'));
+app.use('/lodgings', apiLimiter, require('./modules/lodging/lodging.routes'));
+app.use('/food', apiLimiter, require('./modules/food/food.routes'));
+app.use('/transit', apiLimiter, require('./modules/transit/transit.routes'));
+app.use('/passes', apiLimiter, require('./modules/pass/pass.routes'));
+app.use('/volunteer', apiLimiter, require('./modules/volunteer/volunteer.routes'));
+app.use('/sos', apiLimiter, require('./modules/sos/sos.routes'));
+app.use('/route', apiLimiter, require('./modules/route/route.routes'));
+app.use('/lost-found', apiLimiter, require('./modules/lostfound/lostfound.routes'));
+app.use('/ngo', apiLimiter, require('./modules/ngo/ngo.routes'));
+app.use('/admin', apiLimiter, require('./modules/admin/admin.routes'));
+app.use('/orders', apiLimiter, require('./modules/order/order.routes'));
+app.use('/analytics', apiLimiter, require('./modules/analytics/analytics.routes'));
 
 app.use(notFoundHandler);
 app.use(errorHandler);

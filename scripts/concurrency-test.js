@@ -28,7 +28,7 @@ const BEDS = 10;
 const TAG = `cgtest-${Date.now()}`;
 
 async function main() {
-    await mongoose.connect(process.env.MONGO_URI);
+    await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     const tx = await detectTransactionSupport();
     console.log(`Connected (${tx ? 'transactions on' : 'standalone, compensation mode'})\n`);
     const today = istDate();

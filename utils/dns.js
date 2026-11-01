@@ -1,22 +1,38 @@
 /**
- * Optional DNS override for MongoDB Atlas.
+ * DNS help for MongoDB Atlas.
  *
  * Atlas "mongodb+srv://" addresses need a DNS SRV lookup. Some home routers and
- * Windows setups refuse those lookups ("querySrv ECONNREFUSED"). Setting
- *   DNS_SERVERS=8.8.8.8,1.1.1.1
- * in .env makes Node ask those public DNS servers instead.
- * We also provide standard public DNS servers (Google + Cloudflare) as a default fallback
- * if SRV lookups fail.
+ * Windows setups refuse those lookups ("querySrv ECONNREFUSED"), while some
+ * college / office networks block outside DNS servers instead. So:
+ *   1. DNS_SERVERS=8.8.8.8,1.1.1.1 in .env  -> always use those servers.
+ *   2. Otherwise use the computer's normal DNS, and only if the SRV lookup
+ *      fails, retry once with Google + Cloudflare (connectMongo below).
  */
 const dns = require('dns');
 
+const PUBLIC_DNS = ['8.8.8.8', '1.1.1.1'];
 const envServers = (process.env.DNS_SERVERS || '').split(',').map((s) => s.trim()).filter(Boolean);
-const servers = envServers.length ? envServers : ['8.8.8.8', '1.1.1.1'];
-try {
-    dns.setServers(servers);
-} catch (e) {
-    // ignore if environment prevents custom DNS servers
+if (envServers.length) {
+    try {
+        dns.setServers(envServers);
+    } catch {
+        console.warn('DNS_SERVERS in .env could not be applied; using the system DNS');
+    }
 }
+
+const isDnsError = (err) => /querySrv|queryTxt|ENOTFOUND|EAI_AGAIN|ECONNREFUSED.*_mongodb/i.test(err?.message || '');
+
+/** mongoose.connect with one automatic retry through public DNS when the SRV lookup fails. */
+const connectMongo = async (mongoose, uri, options) => {
+    try {
+        return await mongoose.connect(uri, options);
+    } catch (err) {
+        if (envServers.length || !isDnsError(err)) throw err;
+        console.warn('Atlas DNS lookup failed on this network; retrying with public DNS (8.8.8.8, 1.1.1.1)...');
+        dns.setServers(PUBLIC_DNS);
+        return mongoose.connect(uri, options);
+    }
+};
 
 /** Friendly hint for the common Atlas connection errors. */
 const atlasHint = (message = '') => {
@@ -26,4 +42,4 @@ const atlasHint = (message = '') => {
     return '';
 };
 
-module.exports = { atlasHint };
+module.exports = { atlasHint, connectMongo };

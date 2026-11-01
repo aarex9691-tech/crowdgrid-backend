@@ -1,10 +1,10 @@
 const mongoose = require('mongoose');
-const { atlasHint } = require('../utils/dns');
+const { atlasHint, connectMongo } = require('../utils/dns');
 const { detectTransactionSupport } = require('../utils/tx');
 
 const connectDB = async () => {
     try {
-        const conn = await mongoose.connect(process.env.MONGO_URI);
+        const conn = await connectMongo(mongoose, process.env.MONGO_URI);
         console.log(`MongoDB connected: ${conn.connection.host}`);
         const tx = await detectTransactionSupport();
         console.log(
