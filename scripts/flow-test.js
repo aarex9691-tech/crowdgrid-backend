@@ -46,7 +46,7 @@ async function main() {
     const PHONE = '6999999990';
     await User.deleteMany({ phone: PHONE });
     let me;
-    let savedLane; // lane status changed by the route checks, put back afterwards
+    let savedLanes; // lane statuses before the route checks, put back afterwards
     let hostedId;
     let freeId;
     try {
@@ -188,12 +188,20 @@ async function main() {
         // ---- 10. Safest route to a ghat ----
         const route = require('../modules/route/route.service');
         const { LaneStatus } = require('../modules/route/lane.model');
+        const { SEED_STATUS } = require('../modules/route/network.nashik');
+        const flagship = await Event.findOne({ slug: 'simhastha-kumbh-2027' }, '_id').lean();
+        // Work on a known set of lane statuses (put back afterwards), whatever the database had
+        savedLanes = { eventId: flagship._id, rows: await LaneStatus.find({ eventId: flagship._id }).lean() };
+        if (!savedLanes.rows.some((r) => r.laneId === 'procession-route' && r.status === 'CROWDED')) {
+            console.log('NOTE  This database has no demo lane statuses: run "npm run seed" before the demo so the safest route has something to avoid.');
+        }
+        await LaneStatus.deleteMany({ eventId: flagship._id });
+        await LaneStatus.insertMany(SEED_STATUS.map((l) => ({ ...l, eventId: flagship._id })));
         const net = await route.network({});
-        check('Route network loads with the seeded lane statuses', net.nodes.length > 20 && net.lanes.find((l) => l.id === 'procession-route')?.manualStatus === 'CROWDED');
+        check('Route network loads with the demo lane statuses', net.nodes.length > 20 && net.lanes.find((l) => l.id === 'procession-route')?.manualStatus === 'CROWDED');
         const plan1 = await route.plan({ from: 'tent-city-a', to: 'ramkund' });
         check('Safest route avoids the crowded procession route', plan1.reachable && !plan1.safest.lanes.some((l) => l.id === 'procession-route') && plan1.algorithms.sameCost, `${plan1.safest.distanceM} m, ${plan1.safest.minutes} min; A* ${plan1.algorithms.astar.visited} vs Dijkstra ${plan1.algorithms.dijkstra.visited} junctions`);
         const controlRoom = await User.findOne({ phone: '9000000002' }).lean();
-        savedLane = await LaneStatus.findOne({ laneId: 'ashram-sardar' }).lean();
         await route.setLane(controlRoom, 'ashram-sardar', { status: 'CLOSED', note: 'Flow test' });
         const plan2 = await route.plan({ from: 'tent-city-a', to: 'ramkund' });
         check('Closing a lane changes the safest route straight away', !plan2.safest.lanes.some((l) => l.id === 'ashram-sardar'), plan2.safest.lanes.map((l) => l.name).join(' > '));
@@ -205,10 +213,10 @@ async function main() {
         check('"Use my location" starts from the nearest junction', here.from.id === 'tent-city-a', `${here.from.name}, ${here.from.snappedM} m away`);
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
     } finally {
-        if (savedLane !== undefined) {
+        if (savedLanes) {
             const { LaneStatus } = require('../modules/route/lane.model');
-            if (savedLane) await LaneStatus.replaceOne({ _id: savedLane._id }, savedLane);
-            else await LaneStatus.deleteOne({ laneId: 'ashram-sardar' });
+            await LaneStatus.deleteMany({ eventId: savedLanes.eventId });
+            if (savedLanes.rows.length) await LaneStatus.insertMany(savedLanes.rows);
         }
         if (me) {
             const myBookings = await LodgingBooking.find({ userId: me._id, status: 'CONFIRMED' }).lean();

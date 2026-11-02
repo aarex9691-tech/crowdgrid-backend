@@ -223,7 +223,7 @@ const setLane = async (user, laneId, { status, note } = {}) => {
     const row = await LaneStatus.findOneAndUpdate(
         { eventId: event._id, laneId },
         { $set: { status, note: status === 'NORMAL' ? '' : cleanNote, updatedBy: user._id } },
-        { upsert: true, new: true, runValidators: true }
+        { upsert: true, returnDocument: 'after', runValidators: true }
     ).lean();
     const lane = EDGES.find((e) => e.id === laneId);
     audit.record({ actor: user, action: 'ROUTE_LANE', targetType: 'Lane', summary: `${lane.name}: ${status.toLowerCase()}${cleanNote ? ` (${cleanNote})` : ''}` });
