@@ -5,7 +5,7 @@ const reportSchema = new mongoose.Schema(
         eventId: { type: mongoose.Schema.Types.ObjectId, ref: 'Event' },
         kind: { type: String, enum: ['MISSING', 'FOUND'], required: true },
         personName: { type: String, trim: true },
-        age: Number,
+        age: Number, // approximate age (best guess)
         gender: { type: String, enum: ['MALE', 'FEMALE', 'OTHER', 'UNKNOWN'], default: 'UNKNOWN' },
         description: { type: String, maxlength: 600 },
         clothes: { type: String, maxlength: 300 },
@@ -13,6 +13,9 @@ const reportSchema = new mongoose.Schema(
         currentlyAt: String, // for FOUND: camp / police post where the person is safe
         contactCountryCode: String,
         contactPhone: String,
+        // the missing person's own mobile, if they carry one (optional)
+        personCountryCode: String,
+        personPhone: String,
         photoUrl: String,
         status: { type: String, enum: ['OPEN', 'REUNITED'], default: 'OPEN' },
         reportedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

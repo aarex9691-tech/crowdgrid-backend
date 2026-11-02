@@ -18,7 +18,15 @@ const create = async (user, body = {}, photoUrl) => {
     if (data.eventId && !mongoose.isValidObjectId(data.eventId)) delete data.eventId;
     // Same rules as the report form in the browser
     data.personName = v.text(data.personName, "Person's name", 'personName', { required: kind === 'MISSING' });
-    data.age = v.int(data.age, 'Age', { min: 0, max: 120 });
+    data.age = v.int(data.age, 'Approx. age', { min: 0, max: 120 });
+    // Pilgrims choose Male / Female; staff posting a found person may leave it unknown
+    if (data.gender !== undefined) {
+        data.gender = String(data.gender).toUpperCase();
+        const allowed = kind === 'MISSING' ? ['MALE', 'FEMALE'] : ['MALE', 'FEMALE', 'UNKNOWN'];
+        if (!allowed.includes(data.gender)) throw badRequest('Gender must be male or female');
+    } else if (kind === 'MISSING') {
+        throw badRequest('Choose the gender of the missing person');
+    }
     data.description = v.text(data.description, 'Description', 'longText');
     data.clothes = v.text(data.clothes, 'Clothes', 'shortText');
     data.lastSeenAt = v.text(data.lastSeenAt, 'Last seen at', 'venue', { required: kind === 'MISSING' });
@@ -26,6 +34,11 @@ const create = async (user, body = {}, photoUrl) => {
     const contact = v.mobile(body.contactCountryCode, body.contactPhone, 'Contact number');
     data.contactCountryCode = contact ? contact.countryCode : user.countryCode || '91';
     data.contactPhone = contact ? contact.phone : user.phone;
+    const personPhone = v.mobile(body.personCountryCode, body.personPhone, "Missing person's mobile");
+    if (personPhone) {
+        data.personCountryCode = personPhone.countryCode;
+        data.personPhone = personPhone.phone;
+    }
     for (const k of Object.keys(data)) if (data[k] === undefined) delete data[k];
     const report = await LostFoundReport.create({ ...data, kind, photoUrl, reportedBy: user._id });
     return report.toObject();
@@ -46,7 +59,7 @@ const list = async (viewer, { kind, status = 'OPEN', eventId, q } = {}) => {
     return reports.map((r) => {
         const own = viewer && String(r.reportedBy) === String(viewer._id);
         if (isStaff || own) return r;
-        const { contactPhone, ...rest } = r;
+        const { contactPhone, personPhone, ...rest } = r;
         return rest;
     });
 };

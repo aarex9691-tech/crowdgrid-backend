@@ -75,12 +75,12 @@ async function main() {
 
     // ---------- Events ----------
     const simhastha = await Event.create({
-        title: 'Simhastha Kumbh Mela 2027',
+        title: 'Simhastha Kumbh Mela 2026–28',
         slug: 'simhastha-kumbh-2027',
         kind: 'YATRA',
-        tagline: 'Nashik - Trimbakeshwar',
+        tagline: 'Nashik, Maharashtra',
         description:
-            'The Simhastha Kumbh on the banks of the Godavari at Nashik and Trimbakeshwar. Find verified shelter, langar, shuttles and help in one place.',
+            'The Simhastha Kumbh on the banks of the Godavari at Nashik and Trimbakeshwar. Find verified shelter, langar, transport and help in one place.',
         city: 'Nashik',
         state: 'Maharashtra',
         venue: 'Ramkund & Kushavarta Kund',
@@ -103,7 +103,7 @@ async function main() {
         title: 'Pandharpur Ashadhi Wari 2027',
         slug: 'pandharpur-ashadhi-wari-2027',
         kind: 'YATRA',
-        tagline: 'Alandi & Dehu to Pandharpur',
+        tagline: 'Pandharpur, Maharashtra',
         description: 'The centuries-old palkhi procession of the Warkaris to Lord Vitthal at Pandharpur.',
         city: 'Pandharpur',
         state: 'Maharashtra',

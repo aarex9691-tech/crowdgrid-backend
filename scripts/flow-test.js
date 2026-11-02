@@ -211,6 +211,18 @@ async function main() {
         await expectError('"Use my location" far from Nashik is refused', () => route.plan({ from: 'here', lat: '19.07', lng: '72.87', to: 'ramkund' }), 400, /too far/);
         const here = await route.plan({ from: 'here', lat: '20.0088', lng: '73.7956', to: 'ramkund' });
         check('"Use my location" starts from the nearest junction', here.from.id === 'tent-city-a', `${here.from.name}, ${here.from.snappedM} m away`);
+        // ---- 11. Missing person report (team notes) ----
+        const lostfound = require('../modules/lostfound/lostfound.service');
+        const missing = { kind: 'MISSING', personName: 'Kamla Devi', age: '70', lastSeenAt: 'Ramkund Ghat, Gate 2', eventId: String(flagship._id) };
+        await expectError('Missing report needs male or female', () => lostfound.create(user, missing), 400, /gender/i);
+        await expectError('"Other" gender is not offered for missing reports', () => lostfound.create(user, { ...missing, gender: 'OTHER' }), 400, /male or female/);
+        await expectError("A wrong mobile for the missing person is refused", () => lostfound.create(user, { ...missing, gender: 'FEMALE', personPhone: '12345' }), 400, /Missing person/);
+        const rep = await lostfound.create(user, { ...missing, gender: 'FEMALE', personPhone: '9876543210', contactPhone: '9123456780' });
+        check('Missing report saves approx age, gender, family contact and their own mobile', rep.age === 70 && rep.gender === 'FEMALE' && rep.personPhone === '9876543210' && rep.contactPhone === '9123456780');
+        const publicView = await lostfound.list(null, { kind: 'MISSING' });
+        const shown = publicView.find((r) => String(r._id) === String(rep._id));
+        check('Phone numbers are hidden from the public bulletin', shown && !shown.contactPhone && !shown.personPhone);
+
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
     } finally {
         if (savedLanes) {
@@ -223,7 +235,7 @@ async function main() {
             for (const bk of myBookings) await lodging.cancel(bk._id, { ...me });
             const mealPasses = await Pass.find({ userId: me._id, type: 'MEAL' }).lean();
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
-            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id })]);
+            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id })]);
             await User.deleteOne({ _id: me._id });
         }
         if (freeId) {
