@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Event = require('./event.model');
 const Provider = require('../provider/provider.model');
+const { groupSize } = require('../../utils/limits');
 const { Lodging } = require('../lodging/lodging.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
@@ -330,15 +331,18 @@ const archive = async (id, user) => {
     return { message: 'Event archived' };
 };
 
-/** Price check for the cart: one paid ticket for one person. */
-const quote = async (eventId, user) => {
+/** Price check for the cart: tickets for 1 to 5 people on one pass. */
+const quote = async (eventId, user, people = 1) => {
+    people = groupSize(people, 'tickets');
     const event = await findEvent(eventId);
     if (event.kind !== 'PUBLIC' || event.status !== 'ACTIVE') throw badRequest('Tickets are only sold for public events');
     if (event.endDate < new Date()) throw badRequest('This event has already ended');
-    if ((event.attendeesCount || 0) >= event.capacity) throw conflict('Sorry, this event is full');
+    const left = event.capacity - (event.attendeesCount || 0);
+    if (left <= 0) throw conflict('Sorry, this event is full');
+    if (people > left) throw conflict(`Only ${left} ${left === 1 ? 'place is' : 'places are'} left`);
     if (user && (await Pass.exists({ dedupeKey: `PUBLIC:${event._id}:${user._id}` }))) throw conflict('You are already registered for this event');
     const when = event.startDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    return { event, label: event.title, detail: `1 ticket - ${when} - ${event.venue}, ${event.city}`, amount: event.ticketPrice || 0 };
+    return { event, label: event.title, detail: `${people} ${people === 1 ? 'ticket' : 'tickets'} - ${when} - ${event.venue}, ${event.city}`, amount: (event.ticketPrice || 0) * people };
 };
 
 /**
@@ -347,7 +351,8 @@ const quote = async (eventId, user) => {
  * so concurrent registrations can never push the headcount past capacity. The
  * pass's unique dedupeKey stops the same person registering twice.
  */
-const register = async (eventId, user, { paidByOrder = null } = {}) => {
+const register = async (eventId, user, { paidByOrder = null, people = 1 } = {}) => {
+    people = groupSize(people, 'tickets');
     const event = await findEvent(eventId);
     if (event.kind !== 'PUBLIC') throw badRequest('Registration is only for public events');
     if (event.endDate < new Date()) throw badRequest('This event has already ended');
@@ -360,11 +365,12 @@ const register = async (eventId, user, { paidByOrder = null } = {}) => {
 
     // Claim a seat atomically, outside any transaction
     const claimed = await Event.findOneAndUpdate(
-        { _id: event._id, $expr: { $lt: [{ $ifNull: ['$attendeesCount', 0] }, '$capacity'] } },
-        { $inc: { attendeesCount: 1 } },
+        // room for the whole group: attendeesCount + people <= capacity
+        { _id: event._id, $expr: { $lte: [{ $add: [{ $ifNull: ['$attendeesCount', 0] }, people] }, '$capacity'] } },
+        { $inc: { attendeesCount: people } },
         { returnDocument: 'after' }
     );
-    if (!claimed) throw conflict('Sorry, this event is full');
+    if (!claimed) throw conflict(people > 1 ? `Not enough places left for ${people} people` : 'Sorry, this event is full');
     try {
         const pass = await issuePass({
             type: 'PUBLIC',
@@ -378,6 +384,7 @@ const register = async (eventId, user, { paidByOrder = null } = {}) => {
                 address: event.address,
                 city: event.city,
                 startsAt: event.startDate,
+                people,
                 ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
             },
             validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
@@ -385,9 +392,9 @@ const register = async (eventId, user, { paidByOrder = null } = {}) => {
             dedupeKey,
         });
         realtime.notify(['public', 'control'], 'tickets', { eventId: String(claimed._id) });
-        return { message: "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
+        return { message: people > 1 ? `You're registered with ${people} tickets!` : "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
     } catch (err) {
-        await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -1 } });
+        await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -people } });
         if (err.code === 11000) throw conflict('You are already registered for this event');
         throw err;
     }
@@ -401,7 +408,8 @@ const hostedEvents = async (user) => {
     const events = await Event.find(filter).sort({ startDate: -1 }).lean();
     const counts = await Pass.aggregate([
         { $match: { type: 'PUBLIC', eventId: { $in: events.map((e) => e._id) }, status: { $ne: 'CANCELLED' } } },
-        { $group: { _id: '$eventId', sold: { $sum: 1 }, checkedIn: { $sum: { $cond: [{ $eq: ['$status', 'REDEEMED'] }, 1, 0] } } } },
+        // a pass can cover a group: count people, not passes
+        { $group: { _id: '$eventId', sold: { $sum: { $ifNull: ['$details.people', 1] } }, checkedIn: { $sum: { $cond: [{ $eq: ['$status', 'REDEEMED'] }, { $ifNull: ['$details.people', 1] }, 0] } } } },
     ]);
     const byEvent = new Map(counts.map((c) => [String(c._id), c]));
     return events.map((e) => {

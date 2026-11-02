@@ -8,7 +8,8 @@ const { badRequest, notFound, conflict } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 
 /** One token can feed a family: up to this many people per account per meal. */
-const MAX_PEOPLE_PER_TOKEN = 6;
+const { MAX_PER_ACCOUNT } = require('../../utils/limits');
+const MAX_PEOPLE_PER_TOKEN = MAX_PER_ACCOUNT; // one token feeds up to 5
 
 /** Kitchens with their meal slots for one day (default: today, IST). */
 const listCenters = async (eventId, { sector, date } = {}) => {
@@ -45,7 +46,7 @@ const windowFor = (slot) => {
 };
 
 /**
- * Meal token for one person or a family group (1-6 people, one QR).
+ * Meal token for one person or a family group (1-5 people, one QR).
  *  - quota: atomic decrement of `remaining` by the group size, only while
  *    at least that many plates are left
  *  - anti-hoarding: dedupeKey MEAL:<event>:<date>:<meal>:<user> is a UNIQUE

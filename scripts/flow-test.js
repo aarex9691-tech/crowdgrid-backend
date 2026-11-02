@@ -49,6 +49,7 @@ async function main() {
     let savedLanes; // lane statuses before the route checks, put back afterwards
     let hostedId;
     let freeId;
+    const groupIds = []; // events created by the group-ticket checks
     try {
         // ---- 1. Phone numbers ----
         await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'Test Pilgrim', phone: '900000000612', password: 'Crowd@123' }), 400, /mobile number/i);
@@ -223,6 +224,42 @@ async function main() {
         const shown = publicView.find((r) => String(r._id) === String(rep._id));
         check('Phone numbers are hidden from the public bulletin', shown && !shown.contactPhone && !shown.personPhone);
 
+        // ---- 12. Team notes round 2: limit of 5, group passes, one QR, other yatras ----
+        const transit = require('../modules/transit/transit.service');
+        const Provider = require('../modules/provider/provider.model');
+        const { MAX_PER_ACCOUNT } = require('../utils/limits');
+        check('Booking limit is 5 per account everywhere', MAX_PER_ACCOUNT === 5 && lodging.MAX_BEDS_PER_USER === 5 && food.MAX_PEOPLE_PER_TOKEN === 5);
+        const groupEv = await events.create({ ...base, title: 'Flow test group darshan', ticketPrice: 0, capacity: 7 }, host);
+        groupIds.push(groupEv._id);
+        await expectError('6 tickets on one account are refused', () => events.register(groupEv._id, user, { people: 6 }), 400, /1 to 5/);
+        const grp = await events.register(groupEv._id, user, { people: 5 });
+        const groupAfter = await Event.findById(groupEv._id).lean();
+        check('5 tickets on one pass take 5 places', grp.pass.details.people === 5 && groupAfter.attendeesCount === 5, grp.message);
+        const pilgrim2 = await User.findOne({ phone: '9000000007' }).lean();
+        await expectError('A group bigger than the places left is refused', () => events.register(groupEv._id, { ...pilgrim2, id: String(pilgrim2._id) }, { people: 3 }), 409, /Not enough places/);
+        const freeBus = await TransitRoute.findOne({ kind: 'SHUTTLE', fare: 0, name: 'E-Shuttle S1' }).lean();
+        await Pass.deleteMany({ userId: me._id, type: 'TRANSIT' });
+        const groupBus = await transit.boardingPass(freeBus._id, user, { people: 4 });
+        check('One bus pass covers 4 people', groupBus.pass.details.people === 4, groupBus.message);
+        await expectError('A bus pass for 6 is refused', () => transit.quote(freeBus._id, 6), 400, /1 to 5/);
+        // Cancelled pass: the personal QR now says so instead of "no pass"
+        await passes.cancelPass(groupBus.pass._id);
+        const { qr: qr2 } = await passes.myQr(user);
+        const rc = await passes.scan(qr2, scanner, { service: 'TRANSIT' });
+        check('Personal QR shows a cancelled bus pass as cancelled', rc.result === 'REJECTED' && rc.reason === 'CANCELLED' && rc.personal === true, rc.message);
+        // Other yatras now have services
+        const wariEv = await Event.findOne({ slug: 'pandharpur-ashadhi-wari-2027' }).lean();
+        const rathEv = await Event.findOne({ slug: 'jagannath-rath-yatra-2027' }).lean();
+        const counts = async (ev) => [await Lodging.countDocuments({ eventId: ev._id }), await FoodSlot.countDocuments({ eventId: ev._id }), await TransitRoute.countDocuments({ eventId: ev._id })];
+        const [wl, wf, wt] = await counts(wariEv);
+        const [rl, rf, rt] = await counts(rathEv);
+        check('Wari has camps, meal slots and shuttles', wl >= 3 && wf > 0 && wt >= 2, `${wl} camps, ${wf} slots, ${wt} routes`);
+        check('Rath Yatra has camps, meal slots and shuttles', rl >= 3 && rf > 0 && rt >= 2, `${rl} camps, ${rf} slots, ${rt} routes`);
+        const wariCamp = await Lodging.findOne({ eventId: wariEv._id, pricePerNight: 0 }).lean();
+        const wariBook = await lodging.book(wariCamp._id, user, { beds: 2 });
+        check('A Wari camp can be booked (from the yatra start date)', wariBook.booking?.checkIn >= '2027-06-28', `${wariCamp.name}, check-in ${wariBook.booking?.checkIn}`);
+        check('Vivekananda Kendra is a verified seva organisation', !!(await Provider.exists({ name: 'Vivekananda Kendra', verificationStatus: 'VERIFIED' })));
+
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
     } finally {
         if (savedLanes) {
@@ -237,6 +274,10 @@ async function main() {
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
             await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id })]);
             await User.deleteOne({ _id: me._id });
+        }
+        for (const id of groupIds) {
+            await Pass.deleteMany({ eventId: id });
+            await Event.deleteOne({ _id: id });
         }
         if (freeId) {
             await Pass.deleteMany({ eventId: freeId });

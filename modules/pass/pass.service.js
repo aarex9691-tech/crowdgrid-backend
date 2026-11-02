@@ -87,7 +87,7 @@ const redeem = async (pass, scanner) => {
         return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
     }
 
-    if (pass.status === 'CANCELLED') return { result: 'REJECTED', reason: 'CANCELLED', message: 'Pass was cancelled', pass: summary(pass) };
+    if (pass.status === 'CANCELLED') return { result: 'REJECTED', reason: 'CANCELLED', message: `This pass was cancelled on ${fmt(pass.updatedAt)}. Do not let them in.`, pass: summary(pass) };
     if (now < pass.validFrom) return { result: 'REJECTED', reason: 'NOT_YET_VALID', message: `Not valid until ${fmt(pass.validFrom)}`, pass: summary(pass) };
     if (now > pass.validUntil) return { result: 'REJECTED', reason: 'EXPIRED', message: `Expired at ${fmt(pass.validUntil)}`, pass: summary(pass) };
 
@@ -160,12 +160,33 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
         if (!candidates.length) return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'That pass is no longer valid', holder: person };
     }
     if (!candidates.length) {
-        return { result: 'REJECTED', reason: 'NO_VALID_PASS', message: 'No valid pass for this counter right now', holder: person };
+        return { ...(await whyNothingHere(holder._id, types, now)), holder: person, personal: true };
     }
     if (candidates.length > 1) {
-        return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary) };
+        return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary), personal: true };
     }
-    return redeem(candidates[0], scanner);
+    return { ...(await redeem(candidates[0], scanner)), personal: true };
+};
+
+const TYPE_WORD = { LODGING: 'stay', MEAL: 'meal token', TRANSIT: 'bus pass', PUBLIC: 'event ticket', CORPORATE: 'event badge', VOLUNTEER: 'volunteer ID' };
+
+/**
+ * A personal QR with nothing to redeem here: say why (cancelled, already used,
+ * not valid yet) instead of a bare "no pass", looking at this person's passes
+ * for this counter from the last day and the coming days.
+ */
+const whyNothingHere = async (userId, types, now) => {
+    const near = { userId, validUntil: { $gte: new Date(now.getTime() - 86400000) } };
+    if (types) near.type = { $in: types };
+    const passes = await Pass.find(near).sort({ updatedAt: -1 }).limit(20).lean();
+    const word = (p) => TYPE_WORD[p.type] || 'pass';
+    const cancelled = passes.find((p) => p.status === 'CANCELLED');
+    const used = passes.find((p) => p.status === 'REDEEMED' && p.validUntil >= now);
+    const later = passes.filter((p) => p.status === 'ACTIVE' && p.validFrom > now).sort((a, b) => a.validFrom - b.validFrom)[0];
+    if (used) return { result: 'REJECTED', reason: 'ALREADY_USED', message: `Their ${word(used)} "${used.title}" was already used at ${fmt(used.redeemedAt)}`, pass: summary(used) };
+    if (later) return { result: 'REJECTED', reason: 'NOT_YET_VALID', message: `Their ${word(later)} "${later.title}" is valid from ${fmt(later.validFrom)}`, pass: summary(later) };
+    if (cancelled) return { result: 'REJECTED', reason: 'CANCELLED', message: `Their ${word(cancelled)} "${cancelled.title}" was cancelled on ${fmt(cancelled.updatedAt)}. Do not let them in.`, pass: summary(cancelled) };
+    return { result: 'REJECTED', reason: 'NO_VALID_PASS', message: 'This person has no pass for this counter' };
 };
 
 /** The person's own QR (created on first use). reset=true issues a new one and kills old copies. */

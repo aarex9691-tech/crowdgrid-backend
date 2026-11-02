@@ -53,7 +53,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
 // Free public events (none today: all public events are paid and go through /api/orders)
 router.post('/:id/register', requireAuth, requirePermission('booking:create'), async (req, res) => {
-    res.status(201).json(await events.register(req.params.id, req.user));
+    res.status(201).json(await events.register(req.params.id, req.user, { people: req.body?.people }));
 });
 
 router.post('/:id/corporate/verify', requireAuth, codeAttempts, async (req, res) => {

@@ -113,7 +113,7 @@ async function main() {
         sectors: ['Chandrabhaga Ghat', 'Wakhari Palkhi Tal', 'Temple Precinct'],
         organizerId: authority._id,
     });
-    await Event.create({
+    const rath = await Event.create({
         title: 'Jagannath Rath Yatra 2027',
         slug: 'jagannath-rath-yatra-2027',
         kind: 'YATRA',
@@ -218,6 +218,12 @@ async function main() {
         name: 'Godavari Yuva Mandal', type: 'NGO', eventId: simhastha._id, adminUserId: applicant._id,
         registrationNumber: 'MH/NGO/4471', contactPhone: '9000000009', description: 'Youth group offering family tents near Tapovan.',
     });
+    // Requested by the team: Vivekananda Kendra as a verified seva organisation for Simhastha
+    await Provider.create({
+        name: 'Vivekananda Kendra', type: 'NGO', eventId: simhastha._id, adminUserId: superAdmin._id,
+        contactPhone: '9000000001', verificationStatus: 'VERIFIED', verifiedBy: authority._id, verifiedAt: new Date(),
+        description: 'Seva volunteers for crowd guidance, first aid and annadanam.',
+    });
     await User.updateOne({ _id: ngoAdmin._id }, { providerId: ramSeva._id });
     await User.updateOne({ _id: ngoAdmin2._id }, { providerId: annadan._id });
     await User.updateOne({ _id: volunteer._id }, { providerId: ramSeva._id });
@@ -262,7 +268,7 @@ async function main() {
     const capacities = { BREAKFAST: 800, LUNCH: 1200, DINNER: 1000 };
     for (let d = 0; d < 7; d++) {
         const date = addDays(today, d);
-        for (const c of centers) {
+        for (const c of centers.filter((x) => String(x.eventId) === String(simhastha._id))) {
             for (const meal of Object.keys(MEALS)) {
                 const capacity = capacities[meal];
                 // Today's slots look busy; Godavari Langar lunch shows the "340 / 1200" example
@@ -320,6 +326,96 @@ async function main() {
 
     // ---------- Walking lanes the control room has already marked (safest route) ----------
     await LaneStatus.insertMany(SEED_STATUS.map((l) => ({ ...l, eventId: simhastha._id, updatedBy: authority._id })));
+
+    // ---------- Other yatras: Pandharpur Wari and Puri Rath Yatra (same services as Kumbh) ----------
+    // Kept out of the Kumbh demo history above; demo data, names are illustrative.
+    const [wariSeva, puriSeva] = await Provider.insertMany([
+        {
+            name: 'Pandharpur Warkari Seva Mandal', type: 'TRUST', eventId: wari._id, adminUserId: superAdmin._id,
+            contactPhone: '9000000002', verificationStatus: 'VERIFIED', verifiedBy: authority._id, verifiedAt: new Date(),
+            description: 'Dharamshalas, tent camps and annadanam for Warkaris arriving with the palkhis.',
+        },
+        {
+            name: 'Puri Rath Yatra Seva Samiti', type: 'TRUST', eventId: rath._id, adminUserId: superAdmin._id,
+            contactPhone: '9000000002', verificationStatus: 'VERIFIED', verifiedBy: authority._id, verifiedAt: new Date(),
+            description: 'Shelters, bhog kitchens and shuttles along Bada Danda and to Gundicha Temple.',
+        },
+    ]);
+    const Lx = (event, provider, name, sector, category, beds, available, km, amenities, lat, lng, price = 0) => ({
+        eventId: event._id, providerId: provider._id, name, sector, category, totalBeds: beds, availableBeds: available,
+        distanceToGhatKm: km, amenities, location: { lat, lng }, pricePerNight: price,
+    });
+    const otherLodgings = await Lodging.insertMany([
+        Lx(wari, wariSeva, 'Chandrabhaga Ghat Dharamshala', 'Chandrabhaga Ghat', 'DHARAMSHALA', 150, 60, 0.3, ['Drinking Water', 'Western Toilets', 'Luggage Locker'], 17.6745, 75.3323, 80),
+        Lx(wari, wariSeva, 'Wakhari Warkari Tent Camp', 'Wakhari Palkhi Tal', 'FREE_CAMP', 500, 310, 4.5, ['Drinking Water', 'Bio-Toilets'], 17.703, 75.353),
+        Lx(wari, wariSeva, 'Temple Precinct Family Tents', 'Temple Precinct', 'FAMILY_TENT', 300, 120, 1.2, ['Drinking Water', 'Bio-Toilets', 'Charging Point'], 17.67, 75.32),
+        Lx(rath, puriSeva, 'Bada Danda Dharamshala', 'Bada Danda', 'DHARAMSHALA', 120, 45, 0.4, ['Drinking Water', 'Western Toilets', 'Medical Tent'], 19.807, 85.822, 100),
+        Lx(rath, puriSeva, 'Swargadwar Pilgrim Shelter', 'Swargadwar', 'FREE_CAMP', 400, 230, 1.6, ['Drinking Water', 'Bio-Toilets'], 19.7985, 85.826),
+        Lx(rath, puriSeva, 'Gundicha Family Tents', 'Gundicha Temple', 'FAMILY_TENT', 250, 90, 2.8, ['Drinking Water', 'Bio-Toilets', 'Charging Point'], 19.813, 85.834),
+    ]);
+    await BedAssignment.insertMany(
+        otherLodgings.flatMap((l) => Array.from({ length: l.totalBeds - l.availableBeds }, (_, i) => ({ lodgingId: l._id, bedNo: i + 1, bookingId: null })))
+    );
+    const otherCenters = await FoodCenter.insertMany([
+        { eventId: wari._id, providerId: wariSeva._id, name: 'Vitthal Annachhatra', sector: 'Temple Precinct', menu: ['Pithla-Bhakri', 'Varan-Bhaat'], diet: 'Pure vegetarian, Ekadashi fasting food on request', location: { lat: 17.6793, lng: 75.3308 } },
+        { eventId: wari._id, providerId: wariSeva._id, name: 'Wakhari Palkhi Langar', sector: 'Wakhari Palkhi Tal', menu: ['Poha', 'Khichdi'], diet: 'Pure vegetarian', location: { lat: 17.7025, lng: 75.3525 } },
+        { eventId: rath._id, providerId: puriSeva._id, name: 'Bada Danda Annadan Kendra', sector: 'Bada Danda', menu: ['Dalma', 'Rice', 'Khechudi'], diet: 'Satvik (no onion, no garlic)', location: { lat: 19.8065, lng: 85.8215 } },
+        { eventId: rath._id, providerId: puriSeva._id, name: 'Swargadwar Bhog Kitchen', sector: 'Swargadwar', menu: ['Pakhala', 'Dalma'], diet: 'Pure vegetarian', location: { lat: 19.799, lng: 85.8255 } },
+    ]);
+    const OTHER_MENUS = {
+        'Vitthal Annachhatra': { BREAKFAST: ['Poha', 'Chai'], LUNCH: ['Pithla-Bhakri', 'Varan-Bhaat', 'Amti'], DINNER: ['Khichdi', 'Kadhi'] },
+        'Wakhari Palkhi Langar': { BREAKFAST: ['Upma', 'Banana'], LUNCH: ['Khichdi', 'Papad', 'Buttermilk'], DINNER: ['Dal-Rice', 'Bhaji'] },
+        'Bada Danda Annadan Kendra': { BREAKFAST: ['Chuda-Dahi', 'Banana'], LUNCH: ['Rice', 'Dalma', 'Khechudi'], DINNER: ['Khechudi', 'Saag'] },
+        'Swargadwar Bhog Kitchen': { BREAKFAST: ['Pakhala', 'Badi'], LUNCH: ['Rice', 'Dalma', 'Besara'], DINNER: ['Khechudi', 'Dalma'] },
+    };
+    // Meal slots for the first four days of each yatra (the Food tab shows those until it starts)
+    const otherSlots = [];
+    for (const c of otherCenters) {
+        const ev = String(c.eventId) === String(wari._id) ? wari : rath;
+        const first = istDate(ev.startDate) > today ? istDate(ev.startDate) : today;
+        for (let d = 0; d < 4; d++) {
+            for (const meal of Object.keys(MEALS)) {
+                otherSlots.push({ foodCenterId: c._id, eventId: ev._id, date: addDays(first, d), meal, startTime: MEALS[meal].start, endTime: MEALS[meal].end, capacity: capacities[meal], remaining: capacities[meal], menu: OTHER_MENUS[c.name][meal] });
+            }
+        }
+    }
+    await FoodSlot.insertMany(otherSlots);
+    await TransitRoute.insertMany([
+        {
+            eventId: wari._id, name: 'Palkhi Shuttle P1', kind: 'SHUTTLE', origin: 'Wakhari Palkhi Tal', destination: 'Chandrabhaga Ghat',
+            vehicleType: 'Battery E-Rickshaw', frequencyMins: 10, firstDeparture: '04:00', lastDeparture: '23:00', fare: 0, boardingGate: 'Wakhari gate 1',
+            checkpoints: [
+                { name: 'Wakhari Palkhi Tal', type: 'STOP', lat: 17.703, lng: 75.353 },
+                { name: 'Water point - Isbavi', type: 'WATER', lat: 17.69, lng: 75.34 },
+                { name: 'Chandrabhaga Ghat', type: 'GHAT', lat: 17.6745, lng: 75.3323 },
+            ],
+        },
+        {
+            eventId: wari._id, name: 'Pandharpur Bus Stand Link B2', kind: 'SHUTTLE', origin: 'Pandharpur Bus Stand', destination: 'Vitthal Mandir',
+            vehicleType: 'MSRTC Feeder Bus', frequencyMins: 15, firstDeparture: '05:00', lastDeparture: '22:00', fare: 10, boardingGate: 'Bay 4',
+            checkpoints: [
+                { name: 'Pandharpur Bus Stand', type: 'STOP', lat: 17.6825, lng: 75.3245 },
+                { name: 'Vitthal Mandir', type: 'STOP', lat: 17.6793, lng: 75.3308 },
+            ],
+        },
+        {
+            eventId: rath._id, name: 'Rath Yatra Shuttle R1', kind: 'SHUTTLE', origin: 'Puri Bus Stand', destination: 'Bada Danda',
+            vehicleType: 'Battery E-Rickshaw', frequencyMins: 8, firstDeparture: '04:30', lastDeparture: '23:00', fare: 0, boardingGate: 'Stand gate 2',
+            checkpoints: [
+                { name: 'Puri Bus Stand', type: 'STOP', lat: 19.8115, lng: 85.8255 },
+                { name: 'Bada Danda', type: 'STOP', lat: 19.807, lng: 85.822 },
+            ],
+        },
+        {
+            eventId: rath._id, name: 'Gundicha Link G2', kind: 'SHUTTLE', origin: 'Swargadwar', destination: 'Gundicha Temple',
+            vehicleType: 'Govt Feeder Bus', frequencyMins: 15, firstDeparture: '05:00', lastDeparture: '22:30', fare: 10, boardingGate: 'Swargadwar stop',
+            checkpoints: [
+                { name: 'Swargadwar', type: 'STOP', lat: 19.7985, lng: 85.826 },
+                { name: 'Ambulance halt - Bada Danda', type: 'AMBULANCE', lat: 19.808, lng: 85.8265 },
+                { name: 'Gundicha Temple', type: 'STOP', lat: 19.813, lng: 85.834 },
+            ],
+        },
+    ]);
 
     // ---------- Volunteers ----------
     const approvedApp = await VolunteerApplication.create({

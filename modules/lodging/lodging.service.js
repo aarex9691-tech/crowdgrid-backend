@@ -10,7 +10,8 @@ const { istDate, istDateTime, isDateString } = require('../../utils/time');
 const { HttpError, badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 
-const MAX_BEDS_PER_USER = 4;
+const { MAX_PER_ACCOUNT } = require('../../utils/limits');
+const MAX_BEDS_PER_USER = MAX_PER_ACCOUNT; // 5 beds per account per yatra
 
 /** Camp search for the Lodging tab. Only camps run by verified providers are listed. */
 const search = async (eventId, { sector, category, minBeds } = {}) => {
@@ -107,7 +108,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
     const event = await Event.findById(lodging.eventId).lean();
     const stay = parseStay(event, checkIn, checkOut);
 
-    // Per-person cap across the whole event (max 4 beds per mobile number)
+    // Per-person cap across the whole event (max 5 beds per account)
     const [held] = await LodgingBooking.aggregate([
         { $match: { userId: new mongoose.Types.ObjectId(String(user._id)), eventId: lodging.eventId, status: 'CONFIRMED' } },
         { $group: { _id: null, beds: { $sum: '$beds' } } },

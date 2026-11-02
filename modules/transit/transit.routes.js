@@ -9,7 +9,7 @@ router.get('/', async (req, res) => {
 });
 
 router.post('/:id/pass', requireAuth, requirePermission('booking:create'), async (req, res) => {
-    res.status(201).json(await transit.boardingPass(req.params.id, req.user));
+    res.status(201).json(await transit.boardingPass(req.params.id, req.user, { people: req.body?.people }));
 });
 
 module.exports = router;
