@@ -94,6 +94,12 @@ async function main() {
             { label: '2nd Amrut Snan', date: istDateTime('2027-08-31', '04:00') },
             { label: '3rd Amrut Snan (Nashik)', date: istDateTime('2027-09-11', '04:00') },
         ],
+        tips: [
+            'Amrut Snan days are the busiest: start before dawn and use the "Walk to ghat" tab for the least crowded lanes.',
+            'Akharas bathe first on Amrut Snan days. Pilgrims are let in to the ghats after them.',
+            'Keep your QR pass on your phone and a printed copy. One QR works for your stay, meals and bus.',
+            'Fix a meeting point with your family. If someone is missing, report it here and go to the nearest help booth.',
+        ],
         sectors: Object.values(SECTORS),
         organizerId: authority._id,
     });
@@ -104,12 +110,27 @@ async function main() {
         slug: 'pandharpur-ashadhi-wari-2027',
         kind: 'YATRA',
         tagline: 'Pandharpur, Maharashtra',
-        description: 'The centuries-old palkhi procession of the Warkaris to Lord Vitthal at Pandharpur.',
+        description:
+            'The 700-year-old Wari: lakhs of Warkaris walk about 250 km with the palkhis of Sant Dnyaneshwar (from Alandi) and Sant Tukaram (from Dehu) to Lord Vitthal at Pandharpur for Ashadhi Ekadashi. Book camps along the palkhi route, annadanam and shuttles here.',
         city: 'Pandharpur',
         state: 'Maharashtra',
-        startDate: istDateTime('2027-06-28', '06:00'),
+        venue: 'Vitthal Rukmini Mandir & Chandrabhaga Ghat',
+        startDate: istDateTime('2027-06-25', '06:00'),
         endDate: istDateTime('2027-07-18', '20:00'),
         expectedFootfall: 1500000,
+        // Ekadashi and Purnima dates from the 2027 panchang; palkhi departure is announced by the sansthans
+        keyDates: [
+            { label: 'Palkhis leave Dehu and Alandi (expected)', date: istDateTime('2027-06-25', '16:00') },
+            { label: 'Palkhis reach Wakhari, near Pandharpur', date: istDateTime('2027-07-13', '12:00') },
+            { label: 'Ashadhi Ekadashi: darshan and Chandrabhaga snan', date: istDateTime('2027-07-14', '02:00') },
+            { label: 'Gopalkala at Gopalpur (Wari ends)', date: istDateTime('2027-07-18', '10:00') },
+        ],
+        tips: [
+            'Darshan queues on Ekadashi can run 10 to 15 hours. Mukh darshan (face darshan) is much shorter.',
+            'It is monsoon: carry a raincoat or plastic sheet, and wear footwear with grip for wet ghats.',
+            'Bathe at Chandrabhaga only at marked ghats with lifeguards. The river runs fast after rain.',
+            'Walk with your dindi. If you get separated, go to the nearest help booth or press SOS here.',
+        ],
         sectors: ['Chandrabhaga Ghat', 'Wakhari Palkhi Tal', 'Temple Precinct'],
         organizerId: authority._id,
     });
@@ -118,12 +139,27 @@ async function main() {
         slug: 'jagannath-rath-yatra-2027',
         kind: 'YATRA',
         tagline: 'Puri, Odisha',
-        description: 'The chariot festival of Lord Jagannath, Balabhadra and Subhadra along Bada Danda.',
+        description:
+            'Lord Jagannath, Balabhadra and Devi Subhadra leave the Shree Mandir on three giant chariots, pulled by devotees along Bada Danda to Gundicha Temple, and return nine days later. Book shelter, bhog and shuttles here.',
         city: 'Puri',
         state: 'Odisha',
-        startDate: istDateTime('2027-07-05', '06:00'),
-        endDate: istDateTime('2027-07-15', '20:00'),
+        venue: 'Shree Jagannath Temple & Bada Danda',
+        startDate: istDateTime('2027-06-18', '06:00'),
+        endDate: istDateTime('2027-07-16', '20:00'),
         expectedFootfall: 1000000,
+        // Snana Purnima and Rath Yatra from the 2027 panchang; Bahuda and Suna Besha follow it
+        keyDates: [
+            { label: 'Snana Purnima (bathing festival)', date: istDateTime('2027-06-18', '06:00') },
+            { label: 'Rath Yatra: chariots pulled to Gundicha', date: istDateTime('2027-07-05', '14:00') },
+            { label: 'Bahuda Yatra: return journey', date: istDateTime('2027-07-13', '14:00') },
+            { label: 'Suna Besha: deities in gold', date: istDateTime('2027-07-14', '17:00') },
+        ],
+        tips: [
+            'Bada Danda gets very crowded when the chariots move. Stay on the side lanes and follow police barricades.',
+            'It is hot and humid: drink water often. Free water and ORS points are marked at each shelter.',
+            'Mobile phones and bags are not allowed inside Shree Mandir. Use the shoe and phone counters.',
+            'Keep children close and note your meeting point. If someone is missing, report it here right away.',
+        ],
         sectors: ['Bada Danda', 'Gundicha Temple', 'Swargadwar'],
         organizerId: authority._id,
     });
@@ -174,6 +210,69 @@ async function main() {
         endDate: istDateTime(addDays(today, 6), '21:30'),
         capacity: 400,
         attendeesCount: 137,
+        ticketPrice: 99,
+    }));
+    // Public events at the other yatras, on their real festival days
+    const wariPub = (o) => pub({ city: 'Pandharpur', state: 'Maharashtra', ...o });
+    const rathPub = (o) => pub({ city: 'Puri', state: 'Odisha', ...o });
+    await Event.create(wariPub({
+        title: 'Ringan Darshan Seating at Wakhari',
+        slug: 'wakhari-ringan-seating',
+        category: 'SPIRITUAL',
+        description: 'Shaded seating on the edge of the Wakhari ringan ground to watch the horses of the palkhi run the sacred circle, the last ringan before Pandharpur. Water, a rain sheet and a guide who explains each step of the ceremony.',
+        venue: 'Wakhari Palkhi Tal, Stand B',
+        address: 'Wakhari, Pandharpur',
+        pincode: '413304',
+        location: { lat: 17.7032, lng: 75.3531 },
+        startDate: istDateTime('2027-07-13', '09:00'),
+        endDate: istDateTime('2027-07-13', '13:00'),
+        capacity: 300,
+        attendeesCount: 84,
+        ticketPrice: 49,
+    }));
+    await Event.create(wariPub({
+        title: 'Abhang Kirtan Sandhya by the Chandrabhaga',
+        slug: 'chandrabhaga-kirtan-sandhya',
+        category: 'CULTURAL',
+        description: 'An evening of abhangs of Sant Tukaram and Sant Dnyaneshwar sung by Warkari kirtankars with taal and mridang, on the eve of Ashadhi Ekadashi. Seating on mats; please remove footwear at the entrance.',
+        venue: 'Chandrabhaga Ghat, Kirtan Mandap',
+        address: 'Chandrabhaga Ghat, Pandharpur',
+        pincode: '413304',
+        location: { lat: 17.6773, lng: 75.3328 },
+        startDate: istDateTime('2027-07-13', '19:00'),
+        endDate: istDateTime('2027-07-13', '22:00'),
+        capacity: 500,
+        attendeesCount: 212,
+        ticketPrice: 0,
+    }));
+    await Event.create(rathPub({
+        title: 'Rath Yatra Viewing Gallery, Bada Danda',
+        slug: 'bada-danda-viewing-gallery',
+        category: 'SPIRITUAL',
+        description: 'Reserved seats in a covered gallery on Bada Danda to watch Taladhwaja, Darpadalana and Nandighosa being pulled towards Gundicha. Drinking water, first aid and a separate exit lane. Arrive by 11 am; gates close when the chariots start moving.',
+        venue: 'Bada Danda Gallery 3, near Marichi Kote',
+        address: 'Grand Road, Puri',
+        pincode: '752001',
+        location: { lat: 19.8077, lng: 85.8237 },
+        startDate: istDateTime('2027-07-05', '11:00'),
+        endDate: istDateTime('2027-07-05', '19:00'),
+        capacity: 250,
+        attendeesCount: 101,
+        ticketPrice: 299,
+    }));
+    await Event.create(rathPub({
+        title: 'Suna Besha Evening Darshan Walk',
+        slug: 'suna-besha-darshan-walk',
+        category: 'HERITAGE_WALK',
+        description: 'A guided walk to see the deities on their chariots in gold ornaments on Suna Besha evening, with a local guide who explains the rituals and the history of the Shree Mandir. Small groups; wear light clothes and carry water.',
+        venue: 'Singhadwara (Lion Gate)',
+        address: 'Shree Jagannath Temple, Puri',
+        pincode: '752001',
+        location: { lat: 19.8048, lng: 85.8180 },
+        startDate: istDateTime('2027-07-14', '17:00'),
+        endDate: istDateTime('2027-07-14', '20:00'),
+        capacity: 40,
+        attendeesCount: 9,
         ticketPrice: 99,
     }));
     await Event.create({

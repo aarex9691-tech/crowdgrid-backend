@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Event = require('./event.model');
 const Provider = require('../provider/provider.model');
-const { groupSize } = require('../../utils/limits');
+const { groupSize, MAX_PER_ACCOUNT } = require('../../utils/limits');
 const { Lodging } = require('../lodging/lodging.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
@@ -331,6 +331,23 @@ const archive = async (id, user) => {
     return { message: 'Event archived' };
 };
 
+/**
+ * Tickets this account already holds for a public event (cancelled passes do not count).
+ * An account can book in several goes (e.g. 2 now, 3 later) up to MAX_PER_ACCOUNT tickets.
+ * Each booking gets its own slot key PUBLIC:<event>:<user>[:<n>], so two bookings sent at
+ * the same moment cannot both take the same slot (unique index on dedupeKey).
+ */
+const myTickets = async (eventId, userId) => {
+    const passes = await Pass.find({ type: 'PUBLIC', eventId, userId }).select('status details.people').lean();
+    const held = passes.filter((p) => p.status !== 'CANCELLED').reduce((n, p) => n + (p.details?.people || 1), 0);
+    return { held, bookings: passes.length, left: Math.max(0, MAX_PER_ACCOUNT - held) };
+};
+const ticketKey = (eventId, userId, bookings) => `PUBLIC:${eventId}:${userId}${bookings ? `:${bookings + 1}` : ''}`;
+const limitMessage = (held) =>
+    held >= MAX_PER_ACCOUNT
+        ? `You already have ${MAX_PER_ACCOUNT} tickets for this event, the most one account can book`
+        : `You already have ${held} ${held === 1 ? 'ticket' : 'tickets'}; you can book ${MAX_PER_ACCOUNT - held} more for this event`;
+
 /** Price check for the cart: tickets for 1 to 5 people on one pass. */
 const quote = async (eventId, user, people = 1) => {
     people = groupSize(people, 'tickets');
@@ -340,7 +357,10 @@ const quote = async (eventId, user, people = 1) => {
     const left = event.capacity - (event.attendeesCount || 0);
     if (left <= 0) throw conflict('Sorry, this event is full');
     if (people > left) throw conflict(`Only ${left} ${left === 1 ? 'place is' : 'places are'} left`);
-    if (user && (await Pass.exists({ dedupeKey: `PUBLIC:${event._id}:${user._id}` }))) throw conflict('You are already registered for this event');
+    if (user) {
+        const mine = await myTickets(event._id, user._id);
+        if (people > mine.left) throw conflict(limitMessage(mine.held));
+    }
     const when = event.startDate.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
     return { event, label: event.title, detail: `${people} ${people === 1 ? 'ticket' : 'tickets'} - ${when} - ${event.venue}, ${event.city}`, amount: (event.ticketPrice || 0) * people };
 };
@@ -349,7 +369,7 @@ const quote = async (eventId, user, people = 1) => {
  * Registration for a public event (paid at checkout).
  * Atomic seat claim: the $expr filter only matches while attendeesCount < capacity,
  * so concurrent registrations can never push the headcount past capacity. The
- * pass's unique dedupeKey stops the same person registering twice.
+ * per-account limit (5 tickets, in one or more bookings) is checked with myTickets.
  */
 const register = async (eventId, user, { paidByOrder = null, people = 1 } = {}) => {
     people = groupSize(people, 'tickets');
@@ -360,8 +380,9 @@ const register = async (eventId, user, { paidByOrder = null, people = 1 } = {}) 
         throw new HttpError(402, `Tickets cost ₹${event.ticketPrice}. Add the event to your cart and pay at checkout.`);
     }
 
-    const dedupeKey = `PUBLIC:${event._id}:${user._id}`;
-    if (await Pass.exists({ dedupeKey })) throw conflict('You are already registered for this event');
+    const mine = await myTickets(event._id, user._id);
+    if (people > mine.left) throw conflict(limitMessage(mine.held));
+    const dedupeKey = ticketKey(event._id, user._id, mine.bookings);
 
     // Claim a seat atomically, outside any transaction
     const claimed = await Event.findOneAndUpdate(
@@ -395,7 +416,7 @@ const register = async (eventId, user, { paidByOrder = null, people = 1 } = {}) 
         return { message: people > 1 ? `You're registered with ${people} tickets!` : "You're registered!", attendeesCount: claimed.attendeesCount, pass: toClient(pass) };
     } catch (err) {
         await Event.updateOne({ _id: event._id }, { $inc: { attendeesCount: -people } });
-        if (err.code === 11000) throw conflict('You are already registered for this event');
+        if (err.code === 11000) throw conflict('Another booking for this event is in progress on your account. Please try again.');
         throw err;
     }
 };
@@ -467,8 +488,16 @@ const claimCorporateBadge = async (eventId, user, { code, sessions = [] }) => {
     }
 };
 
+/** How many tickets this account holds for an event and how many more it can book. */
+const myTicketCount = async (eventId, user) => {
+    const event = await findEvent(eventId);
+    const mine = await myTickets(event._id, user._id);
+    return { held: mine.held, left: mine.left, max: MAX_PER_ACCOUNT };
+};
+
 module.exports = {
     quote,
+    myTicketCount,
     register,
     hostedEvents,
     findEvent, list, get, create, update, archive,

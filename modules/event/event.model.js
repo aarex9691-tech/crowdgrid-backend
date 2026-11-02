@@ -34,6 +34,7 @@ const eventSchema = new mongoose.Schema(
         expectedFootfall: Number,
         keyDates: { type: [{ _id: false, label: String, date: Date }], default: undefined },
         sectors: { type: [String], default: undefined },
+        tips: { type: [{ type: String, maxlength: 200 }], default: undefined }, // practical advice shown on the yatra page
 
         // PUBLIC: paid events (headcount is updated atomically when tickets are issued)
         category: { type: String, enum: ['SPIRITUAL', 'CULTURAL', 'HERITAGE_WALK', 'SEVA', 'WORKSHOP', 'OTHER'] },

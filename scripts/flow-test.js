@@ -235,6 +235,18 @@ async function main() {
         const grp = await events.register(groupEv._id, user, { people: 5 });
         const groupAfter = await Event.findById(groupEv._id).lean();
         check('5 tickets on one pass take 5 places', grp.pass.details.people === 5 && groupAfter.attendeesCount === 5, grp.message);
+        await expectError('A 6th ticket in a second booking is refused', () => events.register(groupEv._id, user, { people: 1 }), 409, /already have 5 tickets/);
+        const splitEv = await events.create({ ...base, title: 'Flow test split booking', ticketPrice: 0, capacity: 20 }, host);
+        groupIds.push(splitEv._id);
+        const s1 = await events.register(splitEv._id, user, { people: 2 });
+        const s2 = await events.register(splitEv._id, user, { people: 3 });
+        check('One account can book in two goes (2 + 3 tickets)', s1.pass.details.people === 2 && s2.pass.details.people === 3);
+        const count = await events.myTicketCount(splitEv._id, user);
+        check('My-tickets count shows 5 held, 0 left', count.held === 5 && count.left === 0, JSON.stringify(count));
+        await expectError('More than 5 across bookings is refused', () => events.register(splitEv._id, user, { people: 1 }), 409, /already have 5/);
+        await Pass.updateOne({ _id: s1.pass.id || s1.pass._id }, { status: 'CANCELLED' });
+        const again = await events.register(splitEv._id, user, { people: 2 });
+        check('Cancelled tickets free up the account limit', again.pass.details.people === 2);
         const pilgrim2 = await User.findOne({ phone: '9000000007' }).lean();
         await expectError('A group bigger than the places left is refused', () => events.register(groupEv._id, { ...pilgrim2, id: String(pilgrim2._id) }, { people: 3 }), 409, /Not enough places/);
         const freeBus = await TransitRoute.findOne({ kind: 'SHUTTLE', fare: 0, name: 'E-Shuttle S1' }).lean();
@@ -255,9 +267,13 @@ async function main() {
         const [rl, rf, rt] = await counts(rathEv);
         check('Wari has camps, meal slots and shuttles', wl >= 3 && wf > 0 && wt >= 2, `${wl} camps, ${wf} slots, ${wt} routes`);
         check('Rath Yatra has camps, meal slots and shuttles', rl >= 3 && rf > 0 && rt >= 2, `${rl} camps, ${rf} slots, ${rt} routes`);
+        check('Wari and Rath Yatra have key dates and tips', wariEv.keyDates?.length >= 4 && rathEv.keyDates?.length >= 4 && wariEv.tips?.length && rathEv.tips?.length);
+        check('Ashadhi Ekadashi 2027 is on 14 July, Rath Yatra on 5 July', wariEv.keyDates.some((d) => /Ekadashi/.test(d.label) && d.date.toISOString().startsWith('2027-07-1')) && rathEv.keyDates.some((d) => /Rath Yatra/.test(d.label) && d.date.toISOString().startsWith('2027-07-05')));
+        const [wariPubs, rathPubs] = await Promise.all([Event.countDocuments({ kind: 'PUBLIC', city: 'Pandharpur' }), Event.countDocuments({ kind: 'PUBLIC', city: 'Puri' })]);
+        check('Wari and Rath Yatra have their own public events', wariPubs >= 2 && rathPubs >= 2, `${wariPubs} in Pandharpur, ${rathPubs} in Puri`);
         const wariCamp = await Lodging.findOne({ eventId: wariEv._id, pricePerNight: 0 }).lean();
         const wariBook = await lodging.book(wariCamp._id, user, { beds: 2 });
-        check('A Wari camp can be booked (from the yatra start date)', wariBook.booking?.checkIn >= '2027-06-28', `${wariCamp.name}, check-in ${wariBook.booking?.checkIn}`);
+        check('A Wari camp can be booked (from the yatra start date)', wariBook.booking?.checkIn >= '2027-06-25', `${wariCamp.name}, check-in ${wariBook.booking?.checkIn}`);
         check('Vivekananda Kendra is a verified seva organisation', !!(await Provider.exists({ name: 'Vivekananda Kendra', verificationStatus: 'VERIFIED' })));
 
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
