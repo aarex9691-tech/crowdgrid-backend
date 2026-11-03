@@ -32,6 +32,10 @@ const passSchema = new mongoose.Schema(
 
         redeemedAt: Date,
         redeemedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+        // Set when the holder cancels: how much of what they paid comes back
+        cancelledAt: Date,
+        refund: { amount: Number, percent: Number, reference: String },
     },
     { timestamps: true }
 );

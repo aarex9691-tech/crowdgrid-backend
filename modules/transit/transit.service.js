@@ -63,7 +63,7 @@ const boardingPass = async (routeId, user, { paidByOrder = null, people = 1 } = 
                 people,
                 frequencyMins: route.frequencyMins,
                 date: day,
-                ...(paidByOrder ? { paid: route.fare, orderId: String(paidByOrder._id) } : {}),
+                ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
             },
             validFrom: istDateTime(day, '00:00'),
             validUntil: istDateTime(day, '23:59'),

@@ -276,6 +276,56 @@ async function main() {
         check('A Wari camp can be booked (from the yatra start date)', wariBook.booking?.checkIn >= '2027-06-25', `${wariCamp.name}, check-in ${wariBook.booking?.checkIn}`);
         check('Vivekananda Kendra is a verified seva organisation', !!(await Provider.exists({ name: 'Vivekananda Kendra', verificationStatus: 'VERIFIED' })));
 
+        // ---- 13. Cancellation and refunds from the passbook ----
+        const cancellation = require('../modules/pass/cancel.service');
+        const H = 3600e3;
+        const startAt = new Date(Date.now() + 100 * H);
+        const r50 = cancellation.refundFor(startAt, 400, new Date(startAt - 50 * H));
+        const r30 = cancellation.refundFor(startAt, 400, new Date(startAt - 30 * H));
+        const r10 = cancellation.refundFor(startAt, 400, new Date(startAt - 10 * H));
+        check('Refund policy: 100% at 48 h+, 50% at 24-48 h, 0% under 24 h', r50.amount === 400 && r30.amount === 200 && r10.amount === 0, `${r50.amount} / ${r30.amount} / ${r10.amount}`);
+
+        const cEv = await events.create({ ...base, title: 'Flow test cancellation', ticketPrice: 0, capacity: 10, startDate: startAt, endDate: new Date(startAt.getTime() + 2 * H) }, host);
+        groupIds.push(cEv._id);
+        const freeTix = await events.register(cEv._id, user, { people: 3 });
+        const freeQuote = await cancellation.quote(freeTix.pass._id, user);
+        check('Free ticket: quote says cancellable with no money involved', freeQuote.cancellable && freeQuote.paid === 0 && freeQuote.refund === 0);
+        await cancellation.cancel(freeTix.pass._id, user);
+        const cEvAfter = await Event.findById(cEv._id).lean();
+        const freePass = await Pass.findById(freeTix.pass._id).lean();
+        check('Cancelling free tickets gives the 3 places back', cEvAfter.attendeesCount === 0 && freePass.status === 'CANCELLED' && !!freePass.cancelledAt);
+        await expectError('A cancelled pass cannot be cancelled again', () => cancellation.cancel(freeTix.pass._id, user), 400, /already cancelled/);
+
+        const paidTix = await events.register(cEv._id, user, { people: 2, paidByOrder: { _id: new mongoose.Types.ObjectId(), amount: 300 } });
+        check('Event tickets are valid from 1 hour before the start', Math.round((startAt - new Date(paidTix.pass.validFrom)) / 60000) === 60);
+        const paidQuote = await cancellation.quote(paidTix.pass._id, user, new Date(startAt - 30 * H));
+        check('Paid ticket 30 h before: quote shows 50% back (₹150 of ₹300)', paidQuote.percent === 50 && paidQuote.refund === 150 && paidQuote.charge === 150, `${paidQuote.percent}% ₹${paidQuote.refund}`);
+        const paidCancel = await cancellation.cancel(paidTix.pass._id, user, new Date(startAt - 30 * H));
+        check('Cancelling records the refund on the pass', paidCancel.refund === 150 && paidCancel.pass.refund?.amount === 150, paidCancel.message);
+        const late = await events.register(cEv._id, user, { people: 1 });
+        await expectError('A ticket cannot be cancelled after the event starts', () => cancellation.cancel(late.pass._id, user, new Date(startAt.getTime() + 60000)), 400, /already started/);
+
+        const wariBefore = await Lodging.findById(wariCamp._id).lean();
+        await cancellation.cancel(wariBook.pass._id, user);
+        const wariAfter = await Lodging.findById(wariCamp._id).lean();
+        check('Cancelling a stay from the passbook gives the 2 beds back', wariAfter.availableBeds === wariBefore.availableBeds + 2);
+
+        const futureSlot = await FoodSlot.findOne({ eventId: wariEv._id, remaining: { $gte: 2 } }).sort({ date: -1 }).lean();
+        if (futureSlot) {
+            const tok = await food.claim(futureSlot._id, user, { people: 2, names: 'Aai, Baba' });
+            await cancellation.cancel(tok.pass._id, user);
+            const slotAfter = await FoodSlot.findById(futureSlot._id).lean();
+            check('Cancelling a meal token gives the 2 plates back', slotAfter.remaining === futureSlot.remaining, `${slotAfter.remaining} left`);
+        }
+        const passbook = await passes.listMine(user._id);
+        check('Cancelled passes stay in the passbook with their refund', passbook.some((p) => String(p._id) === String(paidTix.pass._id) && p.state === 'CANCELLED' && p.refund?.amount === 150));
+        const volunteerish = await Pass.findOne({ type: { $in: ['CORPORATE', 'VOLUNTEER'] } }).lean();
+        if (volunteerish) {
+            const owner = { _id: volunteerish.userId, name: 'Owner' };
+            const vq = await cancellation.quote(volunteerish._id, owner);
+            check('Badges and volunteer IDs cannot be cancelled from the passbook', !vq.cancellable);
+        }
+
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
     } finally {
         if (savedLanes) {

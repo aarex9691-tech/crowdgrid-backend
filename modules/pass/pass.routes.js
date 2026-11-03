@@ -1,5 +1,6 @@
 const express = require('express');
 const passes = require('./pass.service');
+const cancellation = require('./cancel.service');
 const { requireAuth, requirePermission } = require('../../middleware/auth');
 
 const router = express.Router();
@@ -23,6 +24,14 @@ router.post('/scan', requireAuth, requirePermission('pass:scan'), async (req, re
     const service = String(req.body?.service || 'ANY').toUpperCase();
     const passId = req.body?.passId ? String(req.body.passId) : undefined;
     res.json(await passes.scan(qr, req.user, { service: passes.SERVICE_TYPES[service] !== undefined ? service : 'ANY', passId }));
+});
+
+// Cancel from the passbook: first the quote for the pop-up, then the cancellation
+router.get('/:id/cancel-quote', requireAuth, async (req, res) => {
+    res.json(await cancellation.quote(req.params.id, req.user));
+});
+router.post('/:id/cancel', requireAuth, async (req, res) => {
+    res.json(await cancellation.cancel(req.params.id, req.user));
 });
 
 module.exports = router;

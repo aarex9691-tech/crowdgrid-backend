@@ -151,6 +151,14 @@ const overview = async ({ eventId, days: daysParam } = {}) => {
         Lodging.find({ ...match, isActive: { $ne: false } }, 'name sector totalBeds availableBeds').lean(),
     ]);
     const openSos = await SosIncident.countDocuments({ status: { $ne: 'RESOLVED' } });
+    // Cancellations and refunds in the period, by type (from the passbook Cancel button)
+    const cancelled = await Pass.find({ ...match, cancelledAt: { $gte: since } }, 'type details.paid refund').lean();
+    const cancellations = {
+        count: cancelled.length,
+        refunded: cancelled.reduce((s, p) => s + (p.refund?.amount || 0), 0),
+        kept: cancelled.reduce((s, p) => s + Math.max(0, (p.details?.paid || 0) - (p.refund?.amount || 0)), 0),
+        byType: ['LODGING', 'MEAL', 'TRANSIT', 'PUBLIC'].map((type) => ({ type, count: cancelled.filter((p) => p.type === type).length })),
+    };
 
     const daily = buildDaily({ days, issued, redeemed, orders, sos });
     const meals = buildMeals({ days, redeemed });
@@ -177,6 +185,7 @@ const overview = async ({ eventId, days: daysParam } = {}) => {
         daily,
         meals,
         sectors,
+        cancellations,
         heatmap: buildHeatmap(redeemed),
         sos: { ...buildSos(sos), open: openSos },
     };

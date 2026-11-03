@@ -408,7 +408,7 @@ const register = async (eventId, user, { paidByOrder = null, people = 1 } = {}) 
                 people,
                 ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
             },
-            validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
+            validFrom: new Date(event.startDate.getTime() - 1 * 3600 * 1000), // gates open an hour before
             validUntil: event.endDate,
             dedupeKey,
         });
@@ -477,7 +477,7 @@ const claimCorporateBadge = async (eventId, user, { code, sessions = [] }) => {
                 venue: event.venue,
                 sessions: event.sessions.filter((s) => chosen.includes(s.code)).map((s) => s.title),
             },
-            validFrom: new Date(event.startDate.getTime() - 2 * 3600 * 1000),
+            validFrom: new Date(event.startDate.getTime() - 1 * 3600 * 1000), // gates open an hour before
             validUntil: event.endDate,
             dedupeKey: `CORPORATE:${event._id}:${user._id}`,
         });

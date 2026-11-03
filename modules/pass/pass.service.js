@@ -24,7 +24,9 @@ const toClient = (pass) => {
 };
 
 const listMine = async (userId) => {
-    const passes = await Pass.find({ userId, status: { $ne: 'CANCELLED' } })
+    // cancelled passes stay visible for 30 days so the refund can be seen
+    const since = new Date(Date.now() - 30 * 86400000);
+    const passes = await Pass.find({ userId, $or: [{ status: { $ne: 'CANCELLED' } }, { cancelledAt: { $gte: since } }] })
         .populate('eventId', 'title city slug')
         .sort({ validFrom: 1 })
         .lean();
