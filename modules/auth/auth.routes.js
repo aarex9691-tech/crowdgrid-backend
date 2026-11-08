@@ -14,9 +14,16 @@ const authLimiter = rateLimit({
     message: { message: 'Too many attempts from this network. Please wait 15 minutes and try again.' },
 });
 
+// Sign-up step 1: a 6-digit code for the mobile number (simulated SMS in the demo)
+router.post('/otp', authLimiter, async (req, res) => {
+    const { phone, countryCode } = req.body || {};
+    res.json(await auth.requestOtp({ phone, countryCode }));
+});
+
+// Sign-up step 2: details + the code
 router.post('/register', authLimiter, async (req, res) => {
-    const { name, phone, countryCode, email, password } = req.body || {};
-    res.status(201).json(await auth.register({ name, phone, countryCode, email, password }));
+    const { name, phone, countryCode, email, password, otp } = req.body || {};
+    res.status(201).json(await auth.register({ name, phone, countryCode, email, password, otp }));
 });
 
 router.post('/login', authLimiter, async (req, res) => {

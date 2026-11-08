@@ -45,6 +45,8 @@ async function main() {
     await detectTransactionSupport();
     const PHONE = '6999999990';
     await User.deleteMany({ phone: PHONE });
+    const { OtpCode } = require('../modules/auth/otp');
+    await OtpCode.deleteMany({ phone: PHONE });
     let me;
     let savedLanes; // lane statuses before the route checks, put back afterwards
     let hostedId;
@@ -54,7 +56,14 @@ async function main() {
         // ---- 1. Phone numbers ----
         await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'Test Pilgrim', phone: '900000000612', password: 'Crowd@123' }), 400, /mobile number/i);
         await expectError('Register rejects a 5-digit number', () => auth.register({ name: 'Test Pilgrim', phone: '90000', password: 'Crowd@123' }), 400, /mobile number/i);
-        const reg = await auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123' });
+        // Sign-up needs the one-time code sent to the number (simulated SMS returns it)
+        await expectError('Sign-up without the SMS code is refused', () => auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123' }), 400, /6-digit code/);
+        const sent = await auth.requestOtp({ phone: PHONE, countryCode: '91' });
+        check('A 6-digit code is issued for sign-up (simulated SMS)', /^\d{6}$/.test(sent.devCode || ''));
+        const wrong = sent.devCode === '000000' ? '111111' : '000000';
+        await expectError('A wrong code is refused', () => auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123', otp: wrong }), 400, /not right/);
+        const reg = await auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123', otp: sent.devCode });
+        check('The code works once only', (await OtpCode.countDocuments({ phone: PHONE, usedAt: { $ne: null } })) === 1);
         me = await User.findById(reg.user._id).lean();
         check('Register with +91 works', !!me && me.countryCode === '91');
         const l1 = await auth.login({ identifier: PHONE, password: 'Crowd@123' });
@@ -400,6 +409,7 @@ async function main() {
 
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
     } finally {
+        await OtpCode.deleteMany({ phone: PHONE });
         if (savedLanes) {
             const { LaneStatus } = require('../modules/route/lane.model');
             await LaneStatus.deleteMany({ eventId: savedLanes.eventId });

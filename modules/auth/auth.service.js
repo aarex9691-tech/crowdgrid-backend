@@ -5,6 +5,7 @@ const { ROLES } = require('../../config/roles');
 const { HttpError, badRequest, unauthorized, conflict, notFound } = require('../../utils/httpError');
 const v = require('../../utils/validate');
 const audit = require('../audit/audit.service');
+const otp = require('./otp');
 
 const SALT_ROUNDS = 10;
 const MIN_AGE = 18;
@@ -61,7 +62,14 @@ const validatePassword = (password) => {
  * sent by the client is ignored. Higher roles are granted only through
  * approval flows or by the Super Admin (principle of least privilege).
  */
-const register = async ({ name: rawName, phone, countryCode, email, password }) => {
+/** Step 1 of sign-up: a one-time code for the mobile number (see otp.js). */
+const requestOtp = async ({ phone, countryCode }) => {
+    const mobile = cleanPhoneOrThrow(countryCode, phone);
+    if (await User.exists(phoneQuery(mobile))) throw conflict('An account with this mobile number already exists. Log in instead.');
+    return otp.issue(mobile);
+};
+
+const register = async ({ name: rawName, phone, countryCode, email, password, otp: code }) => {
     const name = v.text(rawName, 'Full name', 'personName', { required: true });
     validatePassword(password);
     const mobile = cleanPhoneOrThrow(countryCode, phone);
@@ -69,6 +77,8 @@ const register = async ({ name: rawName, phone, countryCode, email, password }) 
     if (email && (await User.exists({ email: String(email).toLowerCase() }))) {
         throw conflict('An account with this email already exists');
     }
+    // Step 2: the number must be verified with the code we sent to it
+    await otp.consume(mobile, code);
 
     const user = await User.create({
         name,
@@ -223,4 +233,4 @@ const updateProfile = async (user, body = {}) => {
     return updated.toPublic();
 };
 
-module.exports = { register, login, me, createStaff, logoutAll, updateProfile, ageOn, MIN_AGE, SALT_ROUNDS };
+module.exports = { requestOtp, register, login, me, createStaff, logoutAll, updateProfile, ageOn, MIN_AGE, SALT_ROUNDS };
