@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const LostFoundReport = require('./lostfound.model');
+const { Photo, sniffImage } = require('./photo.model');
 const { hasPermission, STAFF } = require('../../config/roles');
 const audit = require('../audit/audit.service');
 const { badRequest, forbidden, notFound } = require('../../utils/httpError');
@@ -7,7 +8,8 @@ const v = require('../../utils/validate');
 
 const FIELDS = ['eventId', 'personName', 'age', 'gender', 'description', 'clothes', 'lastSeenAt', 'currentlyAt'];
 
-const create = async (user, body = {}, photoUrl) => {
+/** `photo` = { buffer } from the upload, saved only after every field has passed its checks. */
+const create = async (user, body = {}, photo = null) => {
     const kind = String(body.kind || '').toUpperCase();
     if (!['MISSING', 'FOUND'].includes(kind)) throw badRequest('kind must be MISSING or FOUND');
     const perm = kind === 'MISSING' ? 'report:missing:create' : 'report:found:create';
@@ -40,8 +42,22 @@ const create = async (user, body = {}, photoUrl) => {
         data.personPhone = personPhone.phone;
     }
     for (const k of Object.keys(data)) if (data[k] === undefined) delete data[k];
-    const report = await LostFoundReport.create({ ...data, kind, photoUrl, reportedBy: user._id });
-    return report.toObject();
+
+    // Photo last: a rejected report never leaves an orphan image behind
+    let saved = null;
+    if (photo) {
+        const contentType = sniffImage(photo.buffer);
+        if (!contentType) throw badRequest('The photo must be a JPEG, PNG or WEBP image');
+        saved = await Photo.create({ data: photo.buffer, contentType, size: photo.buffer.length, uploadedBy: user._id });
+    }
+    try {
+        const report = await LostFoundReport.create({ ...data, kind, photoUrl: saved ? `/api/lost-found/photos/${saved._id}` : undefined, reportedBy: user._id });
+        if (saved) await Photo.updateOne({ _id: saved._id }, { $set: { reportId: report._id } });
+        return report.toObject();
+    } catch (err) {
+        if (saved) await Photo.deleteOne({ _id: saved._id });
+        throw err;
+    }
 };
 
 /** Public bulletin. Contact numbers are only shown to staff and to the reporter. */

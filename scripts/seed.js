@@ -27,6 +27,7 @@ const { SEED_STATUS } = require('../modules/route/network.nashik');
 const { VolunteerApplication } = require('../modules/volunteer/volunteer.model');
 const SosIncident = require('../modules/sos/sos.model');
 const LostFoundReport = require('../modules/lostfound/lostfound.model');
+const { Photo: LostFoundPhoto } = require('../modules/lostfound/photo.model');
 const AuditLog = require('../modules/audit/audit.model');
 const Order = require('../modules/order/order.model');
 const passToken = require('../utils/passToken');
@@ -54,7 +55,7 @@ async function main() {
     await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, AuditLog, Order, LaneStatus];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();

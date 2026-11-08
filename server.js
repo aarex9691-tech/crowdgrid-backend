@@ -70,6 +70,7 @@ const apiLimiter = rateLimit({
 app.use('/api', apiLimiter);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+// Old photos saved on disk before they moved into MongoDB (new ones: /api/lost-found/photos/:id)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes mounted with /api prefix

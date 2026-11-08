@@ -227,6 +227,18 @@ async function main() {
         await expectError("A wrong mobile for the missing person is refused", () => lostfound.create(user, { ...missing, gender: 'FEMALE', personPhone: '12345' }), 400, /Missing person/);
         const rep = await lostfound.create(user, { ...missing, gender: 'FEMALE', personPhone: '9876543210', contactPhone: '9123456780' });
         check('Missing report saves approx age, gender, family contact and their own mobile', rep.age === 70 && rep.gender === 'FEMALE' && rep.personPhone === '9876543210' && rep.contactPhone === '9123456780');
+        {
+            // Photos live in MongoDB; a fake "image" is refused and leaves nothing behind
+            const { Photo } = require('../modules/lostfound/photo.model');
+            const png = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(32)]);
+            const withPhoto = await lostfound.create(user, { ...missing, gender: 'MALE', personName: 'Photo Test' }, { buffer: png });
+            const stored = await Photo.findOne({ reportId: withPhoto._id }).lean();
+            check('Missing-person photo is stored in the database', !!stored && withPhoto.photoUrl === `/api/lost-found/photos/${stored._id}`, withPhoto.photoUrl);
+            const before = await Photo.countDocuments({ uploadedBy: me._id });
+            await expectError('A file that is not really an image is refused', () => lostfound.create(user, { ...missing, gender: 'MALE' }, { buffer: Buffer.from('<script>alert(1)</script> not an image') }), 400, /JPEG, PNG or WEBP/);
+            await expectError('An invalid report saves no photo', () => lostfound.create(user, { ...missing }, { buffer: png }), 400, /gender/i);
+            check('No orphan photos after refused reports', (await Photo.countDocuments({ uploadedBy: me._id })) === before);
+        }
         const publicView = await lostfound.list(null, { kind: 'MISSING' });
         const shown = publicView.find((r) => String(r._id) === String(rep._id));
         check('Phone numbers are hidden from the public bulletin', shown && !shown.contactPhone && !shown.personPhone);
@@ -345,7 +357,7 @@ async function main() {
             for (const bk of myBookings) await lodging.cancel(bk._id, { ...me });
             const mealPasses = await Pass.find({ userId: me._id, type: 'MEAL' }).lean();
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
-            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id })]);
+            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id }), require('../modules/lostfound/photo.model').Photo.deleteMany({ uploadedBy: me._id })]);
             await User.deleteOne({ _id: me._id });
         }
         for (const id of groupIds) {
