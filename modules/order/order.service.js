@@ -12,6 +12,8 @@ const realtime = require('../../utils/realtime');
 const { groupSize } = require('../../utils/limits');
 
 const MAX_ITEMS = 10;
+const ORDER_TTL_MIN = 15; // an unpaid order (and its server-side prices) lapses after this
+const STUCK_PAYMENT_MIN = 5; // a payment still "processing" after this is treated as interrupted
 
 /** Prices one cart line on the server (the browser's price is never trusted). */
 const priceItem = async (raw, user) => {
@@ -59,7 +61,7 @@ const create = async (user, items) => {
         }
     }
     const total = priced.reduce((s, i) => s + i.amount, 0);
-    const order = await Order.create({ userId: user._id, items: priced, total });
+    const order = await Order.create({ userId: user._id, items: priced, total, expiresAt: new Date(Date.now() + ORDER_TTL_MIN * 60000) });
     return toView(order);
 };
 
@@ -101,13 +103,19 @@ const fulfil = async (order, user) => {
  */
 const pay = async (orderId, user, body = {}) => {
     const order = await findMine(orderId, user);
+    const now = new Date();
+    if (order.status === 'PENDING' && order.expiresAt && order.expiresAt <= now) {
+        await Order.updateOne({ _id: order._id, status: 'PENDING' }, { $set: { status: 'CANCELLED', 'payment.lastError': 'Expired before payment' } });
+        throw new HttpError(410, `This order expired after ${ORDER_TTL_MIN} minutes without payment. Please check out again so prices and places are rechecked.`);
+    }
     const locked = await Order.findOneAndUpdate(
-        { _id: order._id, status: 'PENDING' },
-        { $set: { status: 'PROCESSING' } },
+        { _id: order._id, status: 'PENDING', $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: now } }] },
+        { $set: { status: 'PROCESSING', processingAt: now } },
         { returnDocument: 'after' }
     );
     if (!locked) {
         if (order.status === 'PAID') throw conflict('This order is already paid');
+        if (order.status === 'CANCELLED') throw conflict('This order was cancelled or expired. Please check out again.');
         throw conflict('Payment is already in progress for this order');
     }
 
@@ -164,4 +172,24 @@ const cancel = async (orderId, user) => {
     return { message: 'Order cancelled' };
 };
 
-module.exports = { create, pay, get, mine, cancel };
+/**
+ * Housekeeping, run every few minutes by server.js:
+ *  - unpaid orders older than ORDER_TTL_MIN are cancelled;
+ *  - payments stuck in PROCESSING for STUCK_PAYMENT_MIN (the server stopped mid-payment)
+ *    go back to PENDING so the pilgrim can try again. With the simulated gateway nothing
+ *    was charged; with a real gateway (Razorpay), ask the gateway for the payment's status
+ *    first and only reset when it says the payment did not go through.
+ */
+const sweep = async (now = new Date()) => {
+    const expired = await Order.updateMany(
+        { status: 'PENDING', expiresAt: { $lte: now } },
+        { $set: { status: 'CANCELLED', 'payment.lastError': 'Expired before payment' } }
+    );
+    const stuck = await Order.updateMany(
+        { status: 'PROCESSING', 'payment.paidAt': { $exists: false }, processingAt: { $lte: new Date(now - STUCK_PAYMENT_MIN * 60000) } },
+        { $set: { status: 'PENDING', 'payment.lastError': 'The payment was interrupted and not completed. Please try again.' }, $unset: { processingAt: 1 } }
+    );
+    return { expired: expired.modifiedCount, unstuck: stuck.modifiedCount };
+};
+
+module.exports = { create, pay, get, mine, cancel, sweep, ORDER_TTL_MIN, STUCK_PAYMENT_MIN };

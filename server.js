@@ -116,7 +116,14 @@ if (require.main === module) {
     // One HTTP server carries both the REST API and the live-update WebSocket
     const server = http.createServer(app);
     realtime.init(server, { origin: (origin, cb) => cb(null, isAllowedOrigin(origin)), origins: ORIGINS, authenticate: loadUser });
-    connectDB().then(() => server.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT} (live updates on)`)));
+    connectDB().then(() => {
+        server.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT} (live updates on)`));
+        // Every 5 minutes: expire unpaid orders, recover payments interrupted by a crash
+        const { sweep } = require('./modules/order/order.service');
+        const tick = () => sweep().then((r) => (r.expired || r.unstuck) && console.log(`[orders] expired ${r.expired}, recovered ${r.unstuck}`)).catch((e) => console.warn(`[orders] sweep failed: ${e.message}`));
+        tick();
+        setInterval(tick, 5 * 60000).unref();
+    });
 }
 
 module.exports = app;

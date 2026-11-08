@@ -6,6 +6,8 @@ const mongoose = require('mongoose');
  *
  *   PENDING --pay--> PROCESSING --approved--> PAID      (passes issued)
  *                               --declined--> PENDING   (try again)
+ *   PENDING --15 min unpaid--> CANCELLED                (prices and places are not held forever)
+ *   PROCESSING --stuck 5 min (server crashed mid-payment)--> PENDING
  */
 const itemSchema = new mongoose.Schema(
     {
@@ -38,11 +40,14 @@ const orderSchema = new mongoose.Schema(
             lastError: String,
         },
         refunded: { type: Number, default: 0 }, // items that could not be issued after payment
+        expiresAt: Date, // unpaid orders lapse after ORDER_TTL_MIN (order.service.js)
+        processingAt: Date, // when the current payment attempt started
     },
     { timestamps: true }
 );
 
 orderSchema.index({ userId: 1, createdAt: -1 });
 orderSchema.index({ status: 1, 'payment.paidAt': -1 }); // analytics: revenue per day
+orderSchema.index({ status: 1, expiresAt: 1 }); // expiry sweep
 
 module.exports = mongoose.model('Order', orderSchema);

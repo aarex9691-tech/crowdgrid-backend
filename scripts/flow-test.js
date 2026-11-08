@@ -123,6 +123,19 @@ async function main() {
         check('Payment approved and both passes issued', paid.status === 'PAID' && paid.passes.length === 2, paid.payment?.reference);
         await expectError('Paying the same order twice is refused', () => orders.pay(order._id, user, { method: 'UPI', upiId: 'flow@okaxis' }), 409);
 
+        // ---- 4b. Unpaid orders expire; interrupted payments recover ----
+        {
+            const lapsed = await orders.create(user, [{ kind: 'TRANSIT', refId: String(bus._id) }]);
+            await Order.updateOne({ _id: lapsed._id }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+            await expectError('An order left unpaid for 15 minutes cannot be paid', () => orders.pay(lapsed._id, user, { method: 'UPI', upiId: 'flow@okaxis' }), 410, /expired/i);
+            check('The expired order is marked cancelled', (await Order.findById(lapsed._id).lean()).status === 'CANCELLED');
+            const stuck = await orders.create(user, [{ kind: 'TRANSIT', refId: String(bus._id) }]);
+            await Order.updateOne({ _id: stuck._id }, { $set: { status: 'PROCESSING', processingAt: new Date(Date.now() - 10 * 60000) } });
+            const swept = await orders.sweep();
+            check('A payment stuck for 5+ minutes goes back to "unpaid" so it can be retried', (await Order.findById(stuck._id).lean()).status === 'PENDING' && swept.unstuck >= 1);
+            await orders.cancel(stuck._id, user);
+        }
+
         // ---- 5. Family meal token ----
         const today = istDate();
         const nowHM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
