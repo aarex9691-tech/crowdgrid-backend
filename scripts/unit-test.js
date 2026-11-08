@@ -433,6 +433,19 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         rs.resetLoad();
     });
 
+    await check('Live personal QR: right now OK, a 90-second-old screenshot or an old key refused', () => {
+        process.env.QR_SECRET = process.env.QR_SECRET || 'unit-test-secret';
+        const t = require('../utils/passToken');
+        const uid = '6650a1b2c3d4e5f6a7b8c9d0';
+        const w = t.currentWindow();
+        const qr = `CGL.${uid}.${w}.${t.liveCode(t.liveKey(uid, 'n1'), w)}`;
+        const p = t.parseLive(qr);
+        assert.equal(t.checkLive(p, 'n1'), 'OK');
+        assert.equal(t.checkLive(p, 'n1', Date.now() + 90000), 'EXPIRED');
+        assert.equal(t.checkLive(p, 'n2'), 'FAKE');
+        assert.ok(t.isUserQr(qr) && t.isLiveQr(qr) && !t.isLiveQr(t.encodeUser(uid, 'n1')));
+    });
+
     console.log(`\n${passed} passed, ${failed} failed (today in IST: ${istDate()})`);
     process.exit(failed ? 1 : 0);
 })().catch((err) => {

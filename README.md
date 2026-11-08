@@ -36,6 +36,7 @@ Set `PASS_TIME_WINDOWS=relaxed` in `.env` to let meal tokens scan at any time on
 | `VERCEL_PROJECT` | Vercel project name whose addresses CORS allows (default `crowdgrid-frontend`) |
 | `TEST_MONGO_URI` | Database for the test scripts; must end in `_test` (see below) |
 | `OTP_PROVIDER`, `OTP_REQUIRED` | Sign-up phone codes; `SIMULATED` shows the code on screen |
+| `STATIC_PERSONAL_QR` | `allow` (default, with an ID-check warning) or `deny` fixed personal QRs; live 30-second QRs are always accepted |
 | `ROUTE_LANE_CAPACITY` | Plans per lane per 15 min before load-aware routing doubles its cost (default 40) |
 
 ## Testing without touching the shared database
@@ -159,6 +160,11 @@ the demo, like payments): stored hashed, 5-minute expiry, single use, 3 per hour
 
 **Orders.** Unpaid orders lapse after 15 minutes; a payment interrupted by a crash
 returns to "unpaid" after 5 minutes so it can be retried.
+
+**Live personal QR.** The phone gets a key derived from `QR_SECRET` and the user's QR nonce, and
+makes `CGL.<user>.<30-second step>.<HMAC>` itself every 30 seconds (Web Crypto, works offline).
+The scanner accepts codes up to a minute off (clock drift), so a forwarded screenshot stops
+working within about a minute. Resetting the QR changes the key.
 
 **One meal token per person per meal.** Each pass has a `dedupeKey` such as `MEAL:<event>:<date>:LUNCH:<user>` with a unique index. The database itself rejects the second token, even if two requests arrive together.
 

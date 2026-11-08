@@ -221,6 +221,20 @@ async function main() {
         const r3 = await passes.scan(qr, scanner, { service: 'LODGING' });
         check('Old personal QR stops working after reset', r3.result === 'REJECTED' && r3.reason === 'REVOKED');
 
+        // Live personal QR: changes every 30 s, made on the phone from the key in /my-qr
+        {
+            const passToken = require('../utils/passToken');
+            const mine = await passes.myQr(user);
+            check('My QR also gives the phone a live key (30-second codes)', !!mine.live?.key && mine.live.periodS === 30);
+            const w = passToken.currentWindow();
+            const liveQr = `CGL.${mine.live.userId}.${w}.${passToken.liveCode(mine.live.key, w)}`;
+            const lv = await passes.scan(liveQr, scanner, { service: 'LODGING' });
+            check('A fresh live QR is accepted (finds or explains the pass)', !['FAKE', 'REVOKED', 'OLD_SCREENSHOT'].includes(lv.reason) && lv.personal === true, lv.message);
+            const old = `CGL.${mine.live.userId}.${w - 5}.${passToken.liveCode(mine.live.key, w - 5)}`;
+            const ov = await passes.scan(old, scanner, { service: 'LODGING' });
+            check('A live QR older than a minute (a screenshot) is refused', ov.reason === 'OLD_SCREENSHOT', ov.message);
+        }
+
         // ---- 9. Analytics dashboard (reads the seeded demo history) ----
         const analytics = require('../modules/analytics/analytics.service');
         const ov = await analytics.overview({ days: 14 });

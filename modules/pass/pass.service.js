@@ -137,12 +137,33 @@ const SERVICE_TYPES = {
  * here and now, and redeems the matching one. Each pass is still single use.
  * When two passes match (e.g. two camps), the volunteer picks one.
  */
+/**
+ * Static personal QRs (CGU, the same picture every time) can be screenshotted and
+ * shared. Live QRs (CGL) change every 30 s. STATIC_PERSONAL_QR=deny refuses static
+ * ones; the default accepts them but tells the volunteer to check the person's ID.
+ */
+const staticAllowed = () => process.env.STATIC_PERSONAL_QR !== 'deny';
+
 const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
-    const decoded = passToken.decodeUser(qr);
-    if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
-    const holder = await User.findById(decoded.userId).select('name countryCode phone isActive qrNonce').lean();
-    if (!holder || !holder.isActive || holder.qrNonce !== decoded.nonce) {
-        return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR was reset or is no longer valid. Ask for the new one.' };
+    let holder;
+    let isStatic = false;
+    if (passToken.isLiveQr(qr)) {
+        const parsed = passToken.parseLive(qr);
+        if (!parsed) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
+        holder = await User.findById(parsed.userId).select('name countryCode phone isActive +qrNonce').lean();
+        if (!holder || !holder.isActive || !holder.qrNonce) return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR is no longer valid. Ask for the new one.' };
+        const check = passToken.checkLive(parsed, holder.qrNonce);
+        if (check === 'FAKE') return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code (or the QR was reset)' };
+        if (check === 'EXPIRED') return { result: 'REJECTED', reason: 'OLD_SCREENSHOT', message: 'This QR is more than a minute old: probably a screenshot. Ask them to open the live QR in the app.' };
+    } else {
+        const decoded = passToken.decodeUser(qr);
+        if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
+        holder = await User.findById(decoded.userId).select('name countryCode phone isActive +qrNonce').lean();
+        if (!holder || !holder.isActive || holder.qrNonce !== decoded.nonce) {
+            return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR was reset or is no longer valid. Ask for the new one.' };
+        }
+        if (!staticAllowed()) return { result: 'REJECTED', reason: 'STATIC_QR', message: 'Only the live (moving) QR is accepted. Ask them to open My Passbook in the app.' };
+        isStatic = true;
     }
     const person = { name: holder.name, phone: maskPhone(holder.phone) };
 
@@ -165,9 +186,12 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
         return { ...(await whyNothingHere(holder._id, types, now)), holder: person, personal: true };
     }
     if (candidates.length > 1) {
-        return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary), personal: true };
+        return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary), personal: true, staticQr: isStatic };
     }
-    return { ...(await redeem(candidates[0], scanner)), personal: true };
+    const done = await redeem(candidates[0], scanner);
+    // a static QR could be someone else's screenshot: ask for ID before letting them in
+    if (isStatic && done.result === 'VALID') done.message = `${done.message} - static QR: check their ID`;
+    return { ...done, personal: true, staticQr: isStatic };
 };
 
 const TYPE_WORD = { LODGING: 'stay', MEAL: 'meal token', TRANSIT: 'bus pass', PUBLIC: 'event ticket', CORPORATE: 'event badge', VOLUNTEER: 'volunteer ID' };
@@ -200,7 +224,11 @@ const myQr = async (user, { reset = false } = {}) => {
         doc = { ...doc, qrNonce: nonce };
         if (reset) audit.record({ actor: user, action: 'PERSONAL_QR_RESET', targetType: 'User', targetId: user._id, summary: `${user.name} reset their personal QR` });
     }
-    return { qr: passToken.encodeUser(String(user._id), doc.qrNonce) };
+    return {
+        qr: passToken.encodeUser(String(user._id), doc.qrNonce), // static fallback (old phones without Web Crypto)
+        // the phone makes the live QR itself every 30 s from this key, even offline
+        live: { key: passToken.liveKey(String(user._id), doc.qrNonce), periodS: passToken.LIVE_PERIOD_S, userId: String(user._id) },
+    };
 };
 
 const fmt = (d) =>
