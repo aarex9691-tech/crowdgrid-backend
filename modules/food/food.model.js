@@ -15,6 +15,7 @@ const foodCenterSchema = new mongoose.Schema(
         menu: [String], // what the kitchen usually serves
         diet: { type: String, default: 'Pure vegetarian' }, // e.g. "Satvik (no onion, no garlic)"
         location: { lat: Number, lng: Number },
+        routeNode: String, // junction on the walking map this kitchen opens onto (crowd signal for routes)
         isActive: { type: Boolean, default: true },
     },
     { timestamps: true }

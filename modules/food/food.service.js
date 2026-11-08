@@ -100,7 +100,7 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
                 refId: slot._id,
                 title: `${MEALS[slot.meal].label}${count > 1 ? ` x ${count}` : ''} - ${center.name}`,
                 subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}${count > 1 ? ` - ${count} people` : ''}`,
-                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu, diet: center.diet, people: count, guests },
+                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu, diet: center.diet, people: count, guests, ...(center.routeNode ? { routeNode: center.routeNode } : {}) },
                 validFrom: from,
                 validUntil: until,
                 dedupeKey,

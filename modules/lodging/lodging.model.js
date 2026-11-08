@@ -13,6 +13,7 @@ const lodgingSchema = new mongoose.Schema(
         distanceToGhatKm: Number,
         amenities: [String],
         location: { lat: Number, lng: Number },
+        routeNode: String, // junction on the walking map (modules/route/network.*.js) this camp's gate opens onto
         pricePerNight: { type: Number, default: 0, min: 0 },
         totalBeds: { type: Number, required: true, min: 0 },
         // Beds per tent / room / hall (default by category, see beds.js)

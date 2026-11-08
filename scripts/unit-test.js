@@ -398,6 +398,41 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.equal(rs.nearestNode({ lat: 20.006, lng: 73.7898 }).node.id, 'ramkund');
     });
 
+    await check('Check-ins are linked to map junctions by id (names still work for older passes)', () => {
+        assert.equal(rs.laneConditions({ scans: new Map([['godavari-langar', 20]]) }).get('langar-lane').status, 'BUSY');
+        assert.equal(rs.laneConditions({ scans: new Map([['Godavari Langar', 20]]) }).get('langar-lane').status, 'BUSY');
+    });
+    await check('One unconfirmed SOS cannot steer routes; two people or staff confirmation can', () => {
+        const here = { lat: 20.0063, lng: 73.7908 };
+        assert.equal(rs.trustedSos([{ type: 'CROWD', status: 'OPEN', userId: 'u1', location: here }]).length, 0);
+        assert.equal(rs.trustedSos([{ type: 'CROWD', status: 'OPEN', userId: 'u1', location: here }, { type: 'CROWD', status: 'OPEN', userId: 'u1', location: here }]).length, 0);
+        assert.equal(rs.trustedSos([{ type: 'CROWD', status: 'OPEN', userId: 'u1', location: here }, { type: 'CROWD', status: 'OPEN', userId: 'u2', location: { lat: 20.0064, lng: 73.7909 } }]).length, 2);
+        assert.equal(rs.trustedSos([{ type: 'CROWD', status: 'ACKNOWLEDGED', userId: 'u1', location: here }]).length, 1);
+    });
+    await check('Load-aware routing spreads 120 pilgrims over several routes; A* still equals Dijkstra', () => {
+        const cond = rs.laneConditions({ manual: new Map(SEED_STATUS.map((x) => [x.laneId, x])) });
+        const load = new Map();
+        const routes = new Set();
+        for (let i = 0; i < 120; i++) {
+            const p = rs.planOn(cond, 'tent-city-a', 'ramkund', { load });
+            assert.ok(p.algorithms.sameCost, `A* and Dijkstra disagree at plan ${i}`);
+            routes.add(p.safest.nodes.join('>'));
+            for (const l of p.safest.lanes) load.set(l.id, (load.get(l.id) || 0) + 1);
+        }
+        assert.ok(routes.size > 1, 'everyone was sent the same way');
+        console.log(`      (120 plans used ${routes.size} different routes)`);
+    });
+    await check('Recent plans are forgotten after 15 minutes', () => {
+        rs.resetLoad();
+        const now = Date.now();
+        rs.recordPlan(['a', 'b'], now - 20 * 60000);
+        rs.recordPlan(['a'], now);
+        const l = rs.laneLoad(now);
+        assert.equal(l.get('a'), 1);
+        assert.ok(!l.has('b'));
+        rs.resetLoad();
+    });
+
     console.log(`\n${passed} passed, ${failed} failed (today in IST: ${istDate()})`);
     process.exit(failed ? 1 : 0);
 })().catch((err) => {

@@ -30,6 +30,13 @@ const SOS_OTHER_RADIUS_M = 60;
 const NEAREST_LIMIT_M = 1500;
 const DETOUR = 1.1; // lanes bend: 10% longer than the straight line
 
+// Load-aware routing: every planned route is remembered for LOAD_WINDOW_MIN. A lane that
+// many pilgrims were just sent down costs more, so later pilgrims are spread over other
+// lanes instead of everyone being sent down the same "safest" route.
+//   safest cost = length x crowd factor x (1 + recent plans on the lane / LANE_PLAN_CAPACITY)
+const LOAD_WINDOW_MIN = 15;
+const LANE_PLAN_CAPACITY = Number(process.env.ROUTE_LANE_CAPACITY) || 40; // plans per lane per window before its cost doubles
+
 // ---------- The graph (built once; it never changes while the server runs) ----------
 const nodeById = new Map(NODES.map((n) => [n.id, n]));
 const EDGES = LANES.map(([id, a, b, name]) => ({ id, a, b, name, lengthM: Math.round(haversine(nodeById.get(a), nodeById.get(b)) * DETOUR) }));
@@ -53,6 +60,21 @@ const distanceToLane = (p, a, b) => {
     return Math.hypot(ax + t * dx, ay + t * dy);
 };
 
+/**
+ * Which SOS alerts may change lane status. A single unconfirmed alert could be a prank
+ * (or a fake account) steering everyone's route, so an OPEN alert only counts when staff
+ * have acknowledged it, or when another person raised an OPEN alert within 150 m.
+ * Alerts without a status (tests, older data) are treated as confirmed.
+ */
+const trustedSos = (sos = []) => {
+    const open = sos.filter((s) => s.status === 'OPEN' && s.location && typeof s.location.lat === 'number');
+    return sos.filter((s) => {
+        if (s.status !== 'OPEN') return true;
+        if (!s.location || typeof s.location.lat !== 'number') return false;
+        return open.some((o) => o !== s && String(o.userId) !== String(s.userId) && haversine(o.location, s.location) <= SOS_CROWD_RADIUS_M);
+    });
+};
+
 const raise = (cur, status, reason, out) => {
     out.reasons.push(reason);
     if (RANK[status] > RANK[cur.status]) cur.status = status;
@@ -62,7 +84,7 @@ const raise = (cur, status, reason, out) => {
  * Combines the control room's settings with live signals.
  *   manual: Map laneId -> { status, note, updatedAt }
  *   sos:    [{ type, location: { lat, lng } }] open or acknowledged alerts
- *   scans:  Map place name -> QR check-ins in the last 30 minutes
+ *   scans:  Map node id (or, for older passes, place name) -> people checked in during the last 30 minutes
  * Returns Map laneId -> { status, manualStatus, note, reasons[] }.
  */
 const laneConditions = ({ manual = new Map(), sos = [], scans = new Map() } = {}) => {
@@ -81,11 +103,12 @@ const laneConditions = ({ manual = new Map(), sos = [], scans = new Map() } = {}
                 else if (d <= SOS_OTHER_RADIUS_M) raise(info, 'BUSY', `${s.type.toLowerCase()} SOS on this lane`, info);
             }
             for (const n of [a, b]) {
-                for (const place of n.places || []) {
-                    const count = scans.get(place) || 0;
-                    if (count >= SCANS_CROWDED) raise(info, 'CROWDED', `${count} check-ins at ${place} in ${SCAN_WINDOW_MIN} min`, info);
-                    else if (count >= SCANS_BUSY) raise(info, 'BUSY', `${count} check-ins at ${place} in ${SCAN_WINDOW_MIN} min`, info);
-                }
+                // people checked in at the camp / kitchen on this junction (linked by node id; names only for older passes)
+                const count = (scans.get(n.id) || 0) + (n.places || []).reduce((s, place) => s + (scans.get(place) || 0), 0);
+                if (!count) continue;
+                const where = (n.places || [])[0] || n.name;
+                if (count >= SCANS_CROWDED) raise(info, 'CROWDED', `${count} check-ins at ${where} in ${SCAN_WINDOW_MIN} min`, info);
+                else if (count >= SCANS_BUSY) raise(info, 'BUSY', `${count} check-ins at ${where} in ${SCAN_WINDOW_MIN} min`, info);
             }
         }
         out.set(e.id, info);
@@ -116,11 +139,15 @@ const describe = (result, conditions) => {
     };
 };
 
-/** Plans both routes on a given set of lane conditions (pure, unit tested). */
-const planOn = (conditions, from, to) => {
+/**
+ * Plans both routes on a given set of lane conditions (pure, unit tested).
+ * `load` = Map laneId -> routes recently planned along it (see recordPlan).
+ */
+const planOn = (conditions, from, to, { load = new Map() } = {}) => {
     const status = (e) => conditions.get(e.id).status;
     const shortestW = (e) => (status(e) === 'CLOSED' ? Infinity : e.lengthM);
-    const safestW = (e) => e.lengthM * FACTOR[status(e)];
+    // every multiplier is >= 1, so the straight-line A* estimate still never overestimates
+    const safestW = (e) => e.lengthM * FACTOR[status(e)] * (1 + (load.get(e.id) || 0) / LANE_PLAN_CAPACITY);
 
     const shortest = dijkstra(GRAPH, from, to, shortestW);
     const safest = dijkstra(GRAPH, from, to, safestW);
@@ -139,9 +166,34 @@ const planOn = (conditions, from, to) => {
             dijkstra: { visited: safest.visited, cost: Math.round(safest.cost) },
             astar: { visited: safestAStar.visited, cost: Math.round(safestAStar.cost) },
             sameCost: safest.found === safestAStar.found && (!safest.found || Math.abs(safest.cost - safestAStar.cost) < 1e-6),
+            loadAware: { windowMin: LOAD_WINDOW_MIN, laneCapacity: LANE_PLAN_CAPACITY, lanesWithLoad: [...load.values()].filter(Boolean).length },
         },
     };
 };
+
+// ---------- Recent plans (in memory: one server instance on Render) ----------
+const recentPlans = new Map(); // laneId -> [timestamps]
+
+/** How many routes were planned along each lane in the last LOAD_WINDOW_MIN minutes. */
+const laneLoad = (now = Date.now()) => {
+    const since = now - LOAD_WINDOW_MIN * 60000;
+    const out = new Map();
+    for (const [laneId, times] of recentPlans) {
+        while (times.length && times[0] < since) times.shift();
+        if (times.length) out.set(laneId, times.length);
+        else recentPlans.delete(laneId);
+    }
+    return out;
+};
+
+/** Remember that a pilgrim was just sent along these lanes. */
+const recordPlan = (laneIdsUsed, now = Date.now()) => {
+    for (const id of laneIdsUsed) {
+        if (!recentPlans.has(id)) recentPlans.set(id, []);
+        recentPlans.get(id).push(now);
+    }
+};
+const resetLoad = () => recentPlans.clear();
 
 const nearestNode = (p) => {
     let best = null;
@@ -165,15 +217,22 @@ const loadConditions = async (event) => {
     const since = new Date(Date.now() - SCAN_WINDOW_MIN * 60000);
     const [rows, sos, scanRows] = await Promise.all([
         LaneStatus.find({ eventId: event._id }, 'laneId status note updatedAt').lean(),
-        SosIncident.find({ eventId: event._id, status: { $in: ['OPEN', 'ACKNOWLEDGED'] }, 'location.lat': { $type: 'number' } }, 'type location').lean(),
+        SosIncident.find({ eventId: event._id, status: { $in: ['OPEN', 'ACKNOWLEDGED'] }, 'location.lat': { $type: 'number' } }, 'type location status userId').lean(),
         Pass.aggregate([
             { $match: { eventId: event._id, redeemedAt: { $gte: since }, type: { $in: ['LODGING', 'MEAL'] } } },
-            { $group: { _id: { $cond: [{ $eq: ['$type', 'MEAL'] }, '$details.kitchen', '$title'] }, count: { $sum: 1 } } },
+            {
+                $group: {
+                    // the map junction stored on the pass; older passes fall back to the camp / kitchen name
+                    _id: { $ifNull: ['$details.routeNode', { $cond: [{ $eq: ['$type', 'MEAL'] }, '$details.kitchen', '$title'] }] },
+                    // a family pass brings several people through the gate
+                    count: { $sum: { $ifNull: ['$details.people', { $ifNull: ['$details.beds', 1] }] } },
+                },
+            },
         ]),
     ]);
     return laneConditions({
         manual: new Map(rows.map((r) => [r.laneId, r])),
-        sos,
+        sos: trustedSos(sos),
         scans: new Map(scanRows.map((r) => [r._id, r.count])),
     });
 };
@@ -182,10 +241,12 @@ const loadConditions = async (event) => {
 const network = async ({ eventId } = {}) => {
     const event = await routeEvent(eventId);
     const conditions = await loadConditions(event);
+    const load = laneLoad();
     return {
         event,
         nodes: NODES.map(({ places, ...n }) => n),
-        lanes: EDGES.map((e) => ({ ...e, ...conditions.get(e.id) })),
+        lanes: EDGES.map((e) => ({ ...e, ...conditions.get(e.id), recentPlans: load.get(e.id) || 0 })),
+        loadWindowMin: LOAD_WINDOW_MIN,
         factors: FACTOR,
         generatedAt: new Date(),
     };
@@ -210,7 +271,9 @@ const plan = async ({ eventId, from, to, lat, lng } = {}) => {
     if (start.id === dest.id) throw badRequest('You are already at this ghat');
 
     const conditions = await loadConditions(event);
-    return { from: { id: start.id, name: start.name, snappedM }, to: { id: dest.id, name: dest.name }, ...planOn(conditions, start.id, dest.id), generatedAt: new Date() };
+    const result = planOn(conditions, start.id, dest.id, { load: laneLoad() });
+    if (result.safest) recordPlan(result.safest.lanes.map((l) => l.id)); // this pilgrim will walk it
+    return { from: { id: start.id, name: start.name, snappedM }, to: { id: dest.id, name: dest.name }, ...result, generatedAt: new Date() };
 };
 
 /** Control room marks a lane busy, crowded, closed or back to normal. */
@@ -234,4 +297,4 @@ const setLane = async (user, laneId, { status, note } = {}) => {
 /** Called when something on the ground changes (an SOS) so open route maps re-plan. */
 const conditionsChanged = () => realtime.notify(['public'], 'route', {});
 
-module.exports = { network, plan, setLane, conditionsChanged, laneConditions, planOn, distanceToLane, nearestNode, GRAPH, FACTOR, SPEED_M_PER_MIN };
+module.exports = { network, plan, setLane, conditionsChanged, laneConditions, planOn, distanceToLane, nearestNode, trustedSos, laneLoad, recordPlan, resetLoad, GRAPH, FACTOR, SPEED_M_PER_MIN, LANE_PLAN_CAPACITY };

@@ -169,6 +169,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
                         checkOut: stay.checkOut,
                         nights: dates.length,
                         provider: lodging.providerId.name,
+                        ...(lodging.routeNode ? { routeNode: lodging.routeNode } : {}),
                         ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
                     },
                     validFrom: istDateTime(stay.checkIn, '00:00'),

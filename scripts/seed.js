@@ -570,6 +570,15 @@ async function main() {
         console.log(`  ${await insertHistory({ User, Pass, Order, SosIncident }, history)} (demo pilgrims use phones 7000000001-7000000060)`);
     }
 
+    // Link camps and kitchens to their junction on the walking map (crowd signal for safe routes).
+    // Names are matched ONCE here; after that, passes carry the junction id, so renaming a camp is safe.
+    for (const node of require('../modules/route/network.nashik').NODES) {
+        for (const place of node.places || []) {
+            await Lodging.updateMany({ eventId: simhastha._id, name: place }, { $set: { routeNode: node.id } });
+            await FoodCenter.updateMany({ eventId: simhastha._id, name: place }, { $set: { routeNode: node.id } });
+        }
+    }
+
     // Seats per trip by vehicle (a day's capacity = seats x departures that day)
     await TransitRoute.updateMany({ vehicleType: /rickshaw/i }, { $set: { seatsPerTrip: 6 } });
     await TransitRoute.updateMany({ vehicleType: /bus/i }, { $set: { seatsPerTrip: 40 } });
