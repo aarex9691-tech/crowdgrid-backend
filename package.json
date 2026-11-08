@@ -10,7 +10,10 @@
     "test:concurrency": "node scripts/concurrency-test.js",
     "test:flows": "node scripts/flow-test.js",
     "test:unit": "node scripts/unit-test.js",
-    "simulate": "node scripts/simulate.js"
+    "simulate": "node scripts/simulate.js",
+    "seed:test": "node scripts/seed.js --test",
+    "test": "npm run test:unit",
+    "bench:route": "node scripts/route-benchmark.js"
   },
   "keywords": [],
   "author": "",

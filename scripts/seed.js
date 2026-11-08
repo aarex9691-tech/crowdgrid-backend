@@ -50,10 +50,12 @@ const SECTORS = {
 };
 
 async function main() {
-    if (!process.env.MONGO_URI) throw new Error('MONGO_URI missing in .env');
+    // `npm run seed:test` fills the test database (TEST_MONGO_URI) instead of the shared one
+    const uri = process.argv.includes('--test') ? require('./test-db').testDbUri() : process.env.MONGO_URI;
+    if (!uri) throw new Error('MONGO_URI missing in .env');
     if (!PASSWORD || PASSWORD.length < 8) throw new Error('Set SEED_PASSWORD in .env (8+ characters, a letter and a number): the password for every demo account');
     if (process.env.NODE_ENV === 'production') throw new Error('Refusing to seed a production database');
-    await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
+    await require('../utils/dns').connectMongo(mongoose, uri);
     console.log('Connected. Clearing CrowdGrid collections...');
 
     const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus, TransitRoute.TransitDay];
