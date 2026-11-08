@@ -207,9 +207,10 @@ const fmt = (d) =>
     new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 /** Cancels a pass and frees its dedupe key so the user can claim again. */
-const cancelPass = async (passId, session = null) => {
+const cancelPass = async (passId, session = null, extra = {}) => {
     if (!passId) return;
-    await Pass.updateOne({ _id: passId, status: 'ACTIVE' }, { $set: { status: 'CANCELLED' }, $unset: { dedupeKey: 1 } }, { session });
+    // `extra` (cancelledAt, refund) is written in the same update, so the refund record can never be lost
+    await Pass.updateOne({ _id: passId, status: 'ACTIVE' }, { $set: { status: 'CANCELLED', ...extra }, $unset: { dedupeKey: 1 } }, { session });
 };
 
 const requireQr = (qr) => {

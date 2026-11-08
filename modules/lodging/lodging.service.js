@@ -193,7 +193,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
 };
 
 /** Cancel a booking: flips status atomically, returns the beds, voids the pass. */
-const cancel = async (bookingId, user) => {
+const cancel = async (bookingId, user, { passUpdate = {} } = {}) => {
     const result = await withTransaction(async (session) => {
         const booking = await LodgingBooking.findOneAndUpdate(
             { _id: bookingId, userId: user._id, status: 'CONFIRMED' },
@@ -203,7 +203,7 @@ const cancel = async (bookingId, user) => {
         if (!booking) throw notFound('Active booking not found');
         await Lodging.updateOne({ _id: booking.lodgingId }, { $inc: { availableBeds: booking.beds } }, { session });
         await bedAlloc.release(booking._id, session);
-        await cancelPass(booking.passId, session);
+        await cancelPass(booking.passId, session, passUpdate);
         audit.record({ actor: user, action: 'BOOKING_CANCELLED', targetType: 'LodgingBooking', targetId: booking._id, summary: `${user.name} cancelled a ${booking.beds}-bed booking` });
         return { message: 'Booking cancelled', booking: booking.toObject() };
     });

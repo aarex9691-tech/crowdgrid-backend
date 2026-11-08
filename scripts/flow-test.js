@@ -60,7 +60,7 @@ async function main() {
         const l1 = await auth.login({ identifier: PHONE, password: 'Crowd@123' });
         const l2 = await auth.login({ identifier: `+91 ${PHONE.slice(0, 5)} ${PHONE.slice(5)}`, password: 'Crowd@123' });
         check('Login with 10 digits and with +91 format', !!l1.token && !!l2.token);
-        const demo = await auth.login({ identifier: '9000000006', password: 'Crowd@123' });
+        const demo = await auth.login({ identifier: '9000000006', password: process.env.SEED_PASSWORD });
         check('Demo pilgrim 9000000006 can still log in', !!demo.token);
 
         const event = await Event.findOne({ isFlagship: true }).lean();
@@ -78,6 +78,13 @@ async function main() {
         check('Tent map shows both beds as booked with guest names', mine.length === 2 && mine.every((x) => x.status === 'BOOKED' && x.guest), mine.map((x) => x.guest).join(', '));
         await lodging.cancel(b.booking._id, user);
         check('Cancelling frees the bed numbers', (await BedAssignment.countDocuments({ bookingId: b.booking._id })) === 0);
+
+        // The limit is 5 beds: booking exactly 5 must work (the model once allowed only 4)
+        const bigCamp = await Lodging.findOne({ eventId: event._id, pricePerNight: 0, availableBeds: { $gte: 5 } }).lean();
+        const five = await lodging.book(bigCamp._id, user, { beds: 5, guestNames: ['A', 'B', 'C', 'D', 'E'] });
+        check('Booking 5 beds (the limit) works', five.booking.beds === 5 && five.pass.details.bedNumbers.length === 5, five.pass.details.location);
+        await expectError('A 6th bed on the same account is refused', () => lodging.book(bigCamp._id, user, { beds: 1 }), 400, /limit/i);
+        await lodging.cancel(five.booking._id, user);
 
         // ---- 3. Paid camp must go through checkout ----
         const paidCamp = await Lodging.findOne({ eventId: event._id, pricePerNight: { $gt: 0 }, availableBeds: { $gte: 2 } }).lean();

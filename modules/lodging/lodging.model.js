@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { MAX_PER_ACCOUNT } = require('../../utils/limits');
 
 const CATEGORIES = ['FREE_CAMP', 'DHARAMSHALA', 'FAMILY_TENT', 'SENIOR_DORM', 'ASHRAM'];
 
@@ -30,7 +31,7 @@ const bookingSchema = new mongoose.Schema(
         lodgingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lodging', required: true },
         eventId: { type: mongoose.Schema.Types.ObjectId, ref: 'Event', required: true },
         userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-        beds: { type: Number, required: true, min: 1, max: 4 },
+        beds: { type: Number, required: true, min: 1, max: MAX_PER_ACCOUNT }, // one booking holds up to the per-account limit (5)
         guestNames: [String],
         checkIn: { type: String, required: true }, // YYYY-MM-DD (IST)
         checkOut: { type: String, required: true },

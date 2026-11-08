@@ -33,8 +33,11 @@ const passToken = require('../utils/passToken');
 const { buildHistory, insertHistory } = require('./demo-history');
 const { istDate, istDateTime, addDays } = require('../utils/time');
 
-const PASSWORD = 'Crowd@123';
+// Demo password comes from .env so it never sits in the public repo.
+const PASSWORD = process.env.SEED_PASSWORD;
 const today = istDate();
+// Corporate summit access code: from .env, or a fresh random one each seed
+const CORPORATE_CODE = process.env.SEED_ACCESS_CODE || String(require('crypto').randomInt(100000, 1000000));
 
 const SECTORS = {
     RAMKUND: 'Sector 1 - Ramkund Ghat',
@@ -46,6 +49,7 @@ const SECTORS = {
 
 async function main() {
     if (!process.env.MONGO_URI) throw new Error('MONGO_URI missing in .env');
+    if (!PASSWORD || PASSWORD.length < 8) throw new Error('Set SEED_PASSWORD in .env (8+ characters, a letter and a number): the password for every demo account');
     if (process.env.NODE_ENV === 'production') throw new Error('Refusing to seed a production database');
     await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
@@ -283,7 +287,7 @@ async function main() {
         city: 'Nashik',
         venue: 'Convention Hall, Gangapur Road',
         companyName: 'Sahyadri Infra Pvt Ltd',
-        accessCode: '482913',
+        accessCode: CORPORATE_CODE,
         startDate: istDateTime(addDays(today, 7), '09:30'),
         endDate: istDateTime(addDays(today, 7), '18:00'),
         sessions: [
@@ -564,7 +568,7 @@ async function main() {
         console.log(`  ${await insertHistory({ User, Pass, Order, SosIncident }, history)} (demo pilgrims use phones 7000000001-7000000060)`);
     }
 
-    console.log('\nSeed complete. All demo accounts use the password:', PASSWORD);
+    console.log('\nSeed complete. All demo accounts use SEED_PASSWORD from .env.');
     console.table([
         { role: 'SUPER_ADMIN', phone: '9000000001', name: superAdmin.name },
         { role: 'AUTHORITY', phone: '9000000002', name: authority.name },
@@ -576,7 +580,7 @@ async function main() {
         { role: 'NGO_ADMIN', phone: '9000000008', name: `${ngoAdmin2.name} (Annadan Samiti)` },
         { role: 'USER', phone: '9000000009', name: `${applicant.name} (pending NGO)` },
     ]);
-    console.log(`Corporate access code for "Simhastha Infrastructure & CSR Summit": 482913`);
+    console.log(`Corporate access code for "Simhastha Infrastructure & CSR Summit": ${CORPORATE_CODE}`);
     console.log(`Lodgings: ${lodgings.length}, kitchens: ${centers.length}, meal slots: ${slots.length}, public event: ${cleanup.title}, wari: ${wari.title}`);
     await mongoose.disconnect();
 }

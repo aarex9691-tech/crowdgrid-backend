@@ -428,15 +428,25 @@ const hostedEvents = async (user) => {
     if (user.role !== ROLES.SUPER_ADMIN) filter.organizerId = user._id;
     const events = await Event.find(filter).sort({ startDate: -1 }).lean();
     const counts = await Pass.aggregate([
-        { $match: { type: 'PUBLIC', eventId: { $in: events.map((e) => e._id) }, status: { $ne: 'CANCELLED' } } },
+        { $match: { type: 'PUBLIC', eventId: { $in: events.map((e) => e._id) } } },
         // a pass can cover a group: count people, not passes
-        { $group: { _id: '$eventId', sold: { $sum: { $ifNull: ['$details.people', 1] } }, checkedIn: { $sum: { $cond: [{ $eq: ['$status', 'REDEEMED'] }, { $ifNull: ['$details.people', 1] }, 0] } } } },
+        {
+            $group: {
+                _id: '$eventId',
+                sold: { $sum: { $cond: [{ $ne: ['$status', 'CANCELLED'] }, { $ifNull: ['$details.people', 1] }, 0] } },
+                checkedIn: { $sum: { $cond: [{ $eq: ['$status', 'REDEEMED'] }, { $ifNull: ['$details.people', 1] }, 0] } },
+                // cancelled tickets: the part of the price that was NOT refunded is still revenue
+                keptOnCancel: { $sum: { $cond: [{ $eq: ['$status', 'CANCELLED'] }, { $subtract: [{ $ifNull: ['$details.paid', 0] }, { $ifNull: ['$refund.amount', 0] }] }, 0] } },
+                refunded: { $sum: { $ifNull: ['$refund.amount', 0] } },
+            },
+        },
     ]);
     const byEvent = new Map(counts.map((c) => [String(c._id), c]));
     return events.map((e) => {
         const c = byEvent.get(String(e._id));
         const sold = e.attendeesCount || 0; // includes tickets sold at the counter
-        return { ...e, ticketsSold: sold, onlineTickets: c?.sold || 0, checkedIn: c?.checkedIn || 0, revenue: sold * (e.ticketPrice || 0) };
+        // attendeesCount already drops cancelled tickets; add back what was kept from them
+        return { ...e, ticketsSold: sold, onlineTickets: c?.sold || 0, checkedIn: c?.checkedIn || 0, refunded: c?.refunded || 0, revenue: sold * (e.ticketPrice || 0) + (c?.keptOnCancel || 0) };
     });
 };
 

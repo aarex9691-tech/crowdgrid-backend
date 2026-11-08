@@ -100,34 +100,32 @@ const cancel = async (passId, user, now = new Date()) => {
     const q = await quote(passId, user, now);
     if (!q.cancellable) throw badRequest(q.reason);
     const pass = await findMine(passId, user);
+    // Written in the SAME update that cancels the pass, so a crash can never leave a
+    // cancelled pass without its refund record (the gateway reference is added after)
+    const cancelFields = { cancelledAt: now, refund: { amount: q.refund, percent: q.percent } };
 
     if (pass.type === 'LODGING') {
         // the lodging service cancels the booking, frees the beds and voids the pass in one transaction
-        await lodging.cancel(pass.refId, user);
+        await lodging.cancel(pass.refId, user, { passUpdate: cancelFields });
     } else {
         // atomic: only one cancel can flip an active pass, and never after it starts
         const flipped = await Pass.findOneAndUpdate(
             { _id: pass._id, status: 'ACTIVE' },
-            { $set: { status: 'CANCELLED' }, $unset: { dedupeKey: 1 } },
+            { $set: { status: 'CANCELLED', ...cancelFields }, $unset: { dedupeKey: 1 } },
             { returnDocument: 'after' }
         );
         if (!flipped) throw conflict('This pass was just used or cancelled');
         await release(pass, user);
     }
 
-    let reference;
     if (q.refund > 0) {
-        const r = await gateway().refund({ amount: q.refund });
-        reference = r.reference;
-        if (pass.details?.orderId && mongoose.isValidObjectId(pass.details.orderId)) {
-            await Order.updateOne({ _id: pass.details.orderId }, { $inc: { refunded: q.refund } });
-        }
+        const orderId = pass.details?.orderId && mongoose.isValidObjectId(pass.details.orderId) ? pass.details.orderId : null;
+        const order = orderId ? await Order.findById(orderId, 'payment.reference').lean() : null;
+        const r = await gateway().refund({ amount: q.refund, reference: order?.payment?.reference });
+        await Pass.updateOne({ _id: pass._id }, { $set: { 'refund.reference': r.reference } });
+        if (orderId) await Order.updateOne({ _id: orderId }, { $inc: { refunded: q.refund } });
     }
-    const done = await Pass.findByIdAndUpdate(
-        pass._id,
-        { $set: { cancelledAt: now, refund: { amount: q.refund, percent: q.percent, reference } } },
-        { returnDocument: 'after' }
-    ).lean();
+    const done = await Pass.findById(pass._id).lean();
 
     audit.record({
         actor: user,

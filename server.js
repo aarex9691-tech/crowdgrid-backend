@@ -14,7 +14,8 @@ const { notFoundHandler, errorHandler } = require('./middleware/errors');
 const realtime = require('./utils/realtime');
 const { loadUser } = require('./middleware/auth');
 
-for (const key of ['MONGO_URI', 'JWT_SECRET']) {
+// QR_SECRET is required too: without it QR codes would silently be signed with the login secret
+for (const key of ['MONGO_URI', 'JWT_SECRET', 'QR_SECRET']) {
     if (!process.env[key]) {
         console.error(`Missing ${key} in .env (see .env.example)`);
         process.exit(1);
@@ -26,15 +27,17 @@ const ORIGINS = (process.env.CLIENT_ORIGIN || 'http://localhost:5173')
     .map((s) => s.trim())
     .filter(Boolean);
 
+const VERCEL_PROJECT = (process.env.VERCEL_PROJECT || 'crowdgrid-frontend').toLowerCase().replace(/[^a-z0-9-]/g, '');
+const VERCEL_PREVIEW = new RegExp(`^https://${VERCEL_PROJECT}(-[a-z0-9-]+)?\\.vercel\\.app$`, 'i');
+
 const isAllowedOrigin = (origin) => {
     if (!origin) return true;
     if (ORIGINS.includes(origin) || ORIGINS.includes('*')) return true;
     // Allow any localhost / 127.0.0.1 on any port
     if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
-    // Allow all Vercel domains (production, branch, preview)
-    if (/^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.vercel\.app$/i.test(origin)) return true;
-    // Allow Render domains
-    if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
+    // Our own Vercel deployments only (production + previews of the project named
+    // VERCEL_PROJECT, default "crowdgrid-frontend"), not every site hosted on Vercel
+    if (VERCEL_PREVIEW.test(origin)) return true;
     return false;
 };
 

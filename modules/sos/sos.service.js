@@ -5,6 +5,9 @@ const audit = require('../audit/audit.service');
 const { badRequest, notFound, forbidden } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 
+const MAX_HISTORY = 50;
+const User = require('../auth/user.model');
+
 const num = (v) => (v === undefined || v === null || v === '' ? undefined : Number(v));
 
 /**
@@ -26,6 +29,8 @@ const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) 
         if (hasGps) {
             recent.location = location;
             recent.locationHistory.push({ lat: location.lat, lng: location.lng, at: new Date() });
+            // keep only the latest points so repeated presses cannot grow the document forever
+            if (recent.locationHistory.length > MAX_HISTORY) recent.locationHistory.splice(0, recent.locationHistory.length - MAX_HISTORY);
         }
         if (message) recent.message = message;
         await recent.save();
@@ -76,7 +81,15 @@ const update = async (id, viewer, { status, assignedTo } = {}) => {
         incident.status = status;
         incident.resolvedAt = status === 'RESOLVED' ? new Date() : undefined;
     }
-    if (assignedTo !== undefined) incident.assignedTo = assignedTo || undefined;
+    if (assignedTo !== undefined) {
+        if (assignedTo) {
+            // only an active volunteer can be given an incident
+            if (!mongoose.isValidObjectId(assignedTo)) throw badRequest('Choose a volunteer to assign');
+            const responder = await User.findOne({ _id: assignedTo, role: ROLES.VOLUNTEER, isActive: true }, '_id').lean();
+            if (!responder) throw badRequest('SOS alerts can only be assigned to an active volunteer');
+        }
+        incident.assignedTo = assignedTo || undefined;
+    }
     await incident.save();
     audit.record({
         actor: viewer,

@@ -24,7 +24,7 @@ const speedArg = String(process.argv[2] || process.env.SIM_INTERVAL || 'normal')
 const INTERVAL = Math.max(2, Number(SPEEDS[speedArg] ?? speedArg) || SPEEDS.normal) * 1000;
 const SOS_GAP = INTERVAL <= 4000 ? 60000 : 120000; // never flood the control room with alerts
 let lastSos = Date.now() - SOS_GAP / 2; // first SOS comes after about a minute
-const PASSWORD = process.env.SIM_PASSWORD || 'Crowd@123';
+const PASSWORD = process.env.SIM_PASSWORD || process.env.SEED_PASSWORD;
 const PILGRIMS = 15; // logins are rate limited, so a small group is reused
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -7,7 +7,7 @@ Express + MongoDB backend for CrowdGrid, a pilgrimage and mass-gathering operati
 ```bash
 npm install
 copy .env.example .env      # macOS/Linux: cp .env.example .env
-# edit .env: MONGO_URI (Atlas), JWT_SECRET, QR_SECRET
+# edit .env: MONGO_URI (Atlas), JWT_SECRET, QR_SECRET, SEED_PASSWORD
 npm run seed                 # WARNING: wipes and refills the database in MONGO_URI
 npm run dev                  # http://localhost:5000
 ```
@@ -18,20 +18,11 @@ Generate secrets with `node -e "console.log(require('crypto').randomBytes(48).to
 
 ### Demo accounts (after `npm run seed`)
 
-Every account's password is `Crowd@123`.
-
-| Mobile | Role | Use it to show |
-|---|---|---|
-| 9000000006 | Pilgrim (USER) | Book beds, claim meal token, shuttle pass, RSVP, SOS, passbook |
-| 9000000005 | Ground Volunteer | QR scanner |
-| 9000000003 | NGO / Seva Admin (Shri Ram Seva Trust) | Camp & kitchen manager, approve volunteer |
-| 9000000002 | District Authority | Control room: occupancy, SOS, verify NGO |
-| 9000000001 | Super Admin | Everything |
-| 9000000004 | Corporate Admin | My corporate events: create event, access code, invitations (WhatsApp / email / QR card), attendee list |
-| 9000000007 | Pilgrim with a pending seva application | Approval flow |
-| 9000000009 | Pilgrim with a pending NGO application | Verification flow |
-
-Corporate summit access code: `482913`.
+`npm run seed` creates one account per role (Super Admin, Authority, NGO admin,
+Corporate admin, Volunteer and three pilgrims). Their password is `SEED_PASSWORD`
+from your `.env`, and the corporate access code is `SEED_ACCESS_CODE` (or a random
+code printed by the seed). The phone numbers and passwords are kept in the team's
+private notes, not in this public repository.
 
 Set `PASS_TIME_WINDOWS=relaxed` in `.env` to let meal tokens scan at any time on their day (useful for a demo outside meal hours). The default `strict` follows the spec.
 
