@@ -56,7 +56,7 @@ async function main() {
     await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus, TransitRoute.TransitDay];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
@@ -569,6 +569,10 @@ async function main() {
         const history = buildHistory({ event: simhastha, lodgings, centers, routes, volunteer, passwordHash }, { days: 14 });
         console.log(`  ${await insertHistory({ User, Pass, Order, SosIncident }, history)} (demo pilgrims use phones 7000000001-7000000060)`);
     }
+
+    // Seats per trip by vehicle (a day's capacity = seats x departures that day)
+    await TransitRoute.updateMany({ vehicleType: /rickshaw/i }, { $set: { seatsPerTrip: 6 } });
+    await TransitRoute.updateMany({ vehicleType: /bus/i }, { $set: { seatsPerTrip: 40 } });
 
     console.log('\nSeed complete. All demo accounts use SEED_PASSWORD from .env.');
     console.table([

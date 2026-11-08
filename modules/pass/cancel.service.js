@@ -18,6 +18,8 @@ const { gateway } = require('../order/payment');
 const Event = require('../event/event.model');
 const { FoodSlot } = require('../food/food.model');
 const lodging = require('../lodging/lodging.service');
+const { TransitDay } = require('../transit/transit.model');
+const capacity = require('../../utils/dailyCapacity');
 const audit = require('../audit/audit.service');
 const realtime = require('../../utils/realtime');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
@@ -91,8 +93,11 @@ const release = async (pass, user) => {
     } else if (pass.type === 'PUBLIC') {
         await Event.updateOne({ _id: pass.eventId, attendeesCount: { $gte: people } }, { $inc: { attendeesCount: -people } });
         realtime.notify(['public', 'control'], 'tickets', { eventId: String(pass.eventId) });
+    } else if (pass.type === 'TRANSIT' && pass.details?.date) {
+        // the group's seats on that travel day go back on sale
+        await capacity.release(TransitDay, { routeId: pass.refId, date: pass.details.date }, people);
+        realtime.notify(['public', 'control'], 'passes', { type: 'TRANSIT' });
     }
-    // TRANSIT: shuttles have no seat count, nothing to give back
 };
 
 /** Cancels the pass, frees the place and refunds by the policy. */

@@ -352,6 +352,23 @@ async function main() {
         const [wariAfter] = await nightsLib.attachAvailability([await Lodging.findById(wariCamp._id).lean()], wariStay);
         check('Cancelling a stay from the passbook gives the 2 beds back', wariAfter.availableBeds === wariBefore.availableBeds + 2);
 
+        // ---- Shuttle seats: a day's passes stop at the route's capacity ----
+        {
+            const transitSvc = require('../modules/transit/transit.service');
+            const small = await TransitRoute.create({ eventId: wariEv._id, name: 'Flow test shuttle', kind: 'SHUTTLE', origin: 'A', destination: 'B', fare: 0, seatsPerDay: 3, frequencyMins: 30, firstDeparture: '06:00', lastDeparture: '07:00' });
+            try {
+                await expectError('A group bigger than the seats left is refused', () => transitSvc.boardingPass(small._id, user, { people: 4 }), 409, /seat/i);
+                const bp = await transitSvc.boardingPass(small._id, user, { people: 3 });
+                const listed = (await transitSvc.list(String(wariEv._id))).find((r) => String(r._id) === String(small._id));
+                check('Shuttle seats are counted per day (3 of 3 taken)', bp.pass.details.people === 3 && listed.seatsLeft === 0, `${listed.seatsLeft} left`);
+                await cancellation.cancel(bp.pass._id, user);
+                const relisted = (await transitSvc.list(String(wariEv._id))).find((r) => String(r._id) === String(small._id));
+                check('Cancelling a bus pass puts its seats back on sale', relisted.seatsLeft === 3, `${relisted.seatsLeft} left`);
+            } finally {
+                await Promise.all([TransitRoute.deleteOne({ _id: small._id }), TransitRoute.TransitDay.deleteMany({ routeId: small._id }), Pass.deleteMany({ refId: small._id })]);
+            }
+        }
+
         const futureSlot = await FoodSlot.findOne({ eventId: wariEv._id, remaining: { $gte: 2 } }).sort({ date: -1 }).lean();
         if (futureSlot) {
             const tok = await food.claim(futureSlot._id, user, { people: 2, names: 'Aai, Baba' });
