@@ -16,6 +16,7 @@ const Event = require('../modules/event/event.model');
 const Provider = require('../modules/provider/provider.model');
 const { Lodging, LodgingBooking } = require('../modules/lodging/lodging.model');
 const { BedAssignment } = require('../modules/lodging/beds');
+const nightsLib = require('../modules/lodging/nights');
 const { FoodCenter, FoodSlot } = require('../modules/food/food.model');
 const { Pass } = require('../modules/pass/pass.model');
 const lodgingService = require('../modules/lodging/lodging.service');
@@ -43,7 +44,7 @@ async function main() {
     const provider = await Provider.create({ name: TAG, eventId: event._id, adminUserId: owner._id, verificationStatus: 'VERIFIED' });
     const lodging = await Lodging.create({
         eventId: event._id, providerId: provider._id, name: `${TAG} camp`, sector: 'Test', category: 'FREE_CAMP',
-        totalBeds: BEDS, availableBeds: BEDS,
+        totalBeds: BEDS, heldBeds: 0,
     });
 
     const pilgrims = await User.insertMany(
@@ -58,19 +59,35 @@ async function main() {
         const ok = results.filter((r) => r.status === 'fulfilled').length;
         const soldOut = results.filter((r) => r.status === 'rejected' && r.reason.status === 409).length;
         const other = results.filter((r) => r.status === 'rejected' && r.reason.status !== 409);
-        const after = await Lodging.findById(lodging._id).lean();
+        const [after] = await nightsLib.attachAvailability([await Lodging.findById(lodging._id).lean()], { checkIn: today });
         const bookings = await LodgingBooking.countDocuments({ lodgingId: lodging._id, status: 'CONFIRMED' });
         console.log(`  finished in ${Date.now() - t0} ms`);
         console.log(`  successful bookings : ${ok}`);
         console.log(`  rejected (sold out) : ${soldOut}`);
         if (other.length) console.log(`  other errors        : ${other.length} (first: ${other[0].reason.message})`);
-        console.log(`  beds left in DB     : ${after.availableBeds}`);
+        console.log(`  beds left tonight   : ${after.availableBeds}`);
         console.log(`  bookings in DB      : ${bookings}`);
         const assigned = await BedAssignment.find({ lodgingId: lodging._id }).lean();
         const distinctBeds = new Set(assigned.map((a) => a.bedNo)).size;
         console.log(`  bed numbers given   : ${assigned.length} (${distinctBeds} different)`);
         const pass1 = ok === BEDS && after.availableBeds === 0 && bookings === BEDS && other.length === 0 && assigned.length === BEDS && distinctBeds === BEDS;
         console.log(pass1 ? '  PASS - no double booking\n' : '  FAIL\n');
+
+        // ---- Test 1b: the same camp, the NEXT night ----
+        // Tonight is sold out, but beds are counted per night, so tomorrow is free again.
+        const tomorrow = addDays(today, 1);
+        console.log(`Test 1b: ${PILGRIMS} more pilgrims race for the ${BEDS} beds of the next night (${tomorrow})...`);
+        const results2 = await Promise.allSettled(pilgrims.map((p) => lodgingService.book(lodging._id, p, { beds: 1, checkIn: tomorrow, checkOut: tomorrow })));
+        const ok2 = results2.filter((r) => r.status === 'fulfilled').length;
+        const other2 = results2.filter((r) => r.status === 'rejected' && r.reason.status !== 409);
+        const night2 = await nightsLib.LodgingNight.findOne({ lodgingId: lodging._id, date: tomorrow }).lean();
+        const beds2 = await BedAssignment.find({ lodgingId: lodging._id, date: tomorrow }).lean();
+        console.log(`  successful bookings : ${ok2}`);
+        if (other2.length) console.log(`  other errors        : ${other2.length} (first: ${other2[0].reason.message})`);
+        console.log(`  booked that night   : ${night2?.booked}`);
+        console.log(`  bed numbers given   : ${beds2.length} (${new Set(beds2.map((a) => a.bedNo)).size} different)`);
+        const pass1b = ok2 === BEDS && night2?.booked === BEDS && other2.length === 0 && new Set(beds2.map((a) => a.bedNo)).size === BEDS;
+        console.log(pass1b ? '  PASS - each night is counted on its own, still no double booking\n' : '  FAIL\n');
 
         // ---- Test 2: one pilgrim, 20 simultaneous lunch claims ----
         const center = await FoodCenter.create({ eventId: event._id, providerId: provider._id, name: `${TAG} kitchen`, sector: 'Test' });
@@ -88,12 +105,13 @@ async function main() {
         const pass2 = tokens === 1 && slotAfter.remaining === 99;
         console.log(pass2 ? '  PASS - one token per person per meal\n' : '  FAIL\n');
 
-        process.exitCode = pass1 && pass2 ? 0 : 1;
+        process.exitCode = pass1 && pass1b && pass2 ? 0 : 1;
     } finally {
         const ids = pilgrims.map((p) => p._id);
         await Promise.all([
             Pass.deleteMany({ eventId: event._id }),
             BedAssignment.deleteMany({ lodgingId: lodging._id }),
+            nightsLib.LodgingNight.deleteMany({ lodgingId: lodging._id }),
             LodgingBooking.deleteMany({ eventId: event._id }),
             FoodSlot.deleteMany({ eventId: event._id }),
             FoodCenter.deleteMany({ eventId: event._id }),

@@ -1,4 +1,5 @@
 const { BedAssignment } = require('../lodging/beds');
+const nightsLib = require('../lodging/nights');
 const mongoose = require('mongoose');
 const Provider = require('../provider/provider.model');
 const { Lodging, LodgingBooking, CATEGORIES } = require('../lodging/lodging.model');
@@ -28,7 +29,7 @@ const dashboard = async (user, providerId) => {
     const provider = await resolveProvider(user, providerId);
     const today = istDate();
     const [lodgings, centers] = await Promise.all([
-        Lodging.find({ providerId: provider._id }).sort({ sector: 1 }).lean(),
+        Lodging.find({ providerId: provider._id }).sort({ sector: 1 }).lean().then((ls) => nightsLib.attachAvailability(ls, { checkIn: today })),
         FoodCenter.find({ providerId: provider._id }).lean(),
     ]);
     const [slots, checkInsToday, bookings] = await Promise.all([
@@ -67,7 +68,7 @@ const addLodging = async (user, body = {}) => {
         location: body.location,
         pricePerNight,
         totalBeds,
-        availableBeds: totalBeds,
+        heldBeds: 0,
     });
     audit.record({ actor: user, action: 'CAMP_ADDED', targetType: 'Lodging', targetId: lodging._id, summary: `${user.name} added camp "${lodging.name}" with ${totalBeds} beds` });
     realtime.notify(['public', 'control', `provider:${provider._id}`], 'beds', { lodgingId: String(lodging._id) });
@@ -82,18 +83,25 @@ const adjustBeds = async (user, lodgingId, change) => {
     if (!lodging) throw notFound('Camp not found');
     const provider = await resolveProvider(user, lodging.providerId);
     if (String(provider._id) !== String(lodging.providerId)) throw forbidden('Not your camp');
-    const filter = { _id: lodging._id };
+    // Only applies if nobody changed this camp's size in the meantime
+    const filter = { _id: lodging._id, totalBeds: lodging.totalBeds };
     if (delta < 0) {
-        filter.availableBeds = { $gte: -delta };
-        // The beds removed are the highest-numbered ones; they must not be allocated
         const newTotal = lodging.totalBeds + delta;
-        if (await BedAssignment.exists({ lodgingId: lodging._id, bedNo: { $gt: newTotal } })) {
-            throw badRequest(`Beds above number ${newTotal} are occupied, so they cannot be removed yet`);
+        if (newTotal < (lodging.heldBeds || 0)) throw badRequest(`${lodging.heldBeds} beds are held offline, so the camp cannot go below that`);
+        // The beds removed are the highest-numbered ones; they must be free tonight and on every later night
+        const today = istDate();
+        if (await BedAssignment.exists({ lodgingId: lodging._id, bedNo: { $gt: newTotal }, $or: [{ date: null }, { date: { $gte: today } }] })) {
+            throw badRequest(`Beds above number ${newTotal} are booked on some nights, so they cannot be removed yet`);
+        }
+        const busiest = await nightsLib.LodgingNight.findOne({ lodgingId: lodging._id, date: { $gte: today } }).sort({ booked: -1 }).lean();
+        if (busiest && busiest.booked > newTotal - (lodging.heldBeds || 0)) {
+            throw badRequest(`${busiest.booked} beds are booked on the night of ${busiest.date}, so the camp cannot shrink to ${newTotal}`);
         }
     }
-    const updated = await Lodging.findOneAndUpdate(filter, { $inc: { totalBeds: delta, availableBeds: delta } }, { returnDocument: 'after' }).lean();
-    if (updated) realtime.notify(['public', 'control', `lodging:${updated._id}`, `provider:${updated.providerId}`], 'beds', { lodgingId: String(updated._id) });
-    if (!updated) throw badRequest('Cannot remove beds that are already booked');
+    const updated = await Lodging.findOneAndUpdate(filter, { $inc: { totalBeds: delta } }, { returnDocument: 'after' }).lean();
+    if (!updated) throw badRequest('The camp was just changed by someone else. Please try again.');
+    await nightsLib.attachAvailability([updated], { checkIn: istDate() });
+    realtime.notify(['public', 'control', `lodging:${updated._id}`, `provider:${updated.providerId}`], 'beds', { lodgingId: String(updated._id) });
     audit.record({ actor: user, action: 'BEDS_ADJUSTED', targetType: 'Lodging', targetId: lodging._id, summary: `${user.name} ${delta > 0 ? 'added' : 'removed'} ${Math.abs(delta)} beds at "${lodging.name}"` });
     return updated;
 };

@@ -9,6 +9,7 @@
 const mongoose = require('mongoose');
 const Event = require('../event/event.model');
 const { Lodging } = require('../lodging/lodging.model');
+const nightsLib = require('../lodging/nights');
 const { Pass } = require('../pass/pass.model');
 const Order = require('../order/order.model');
 const SosIncident = require('../sos/sos.model');
@@ -148,7 +149,7 @@ const overview = async ({ eventId, days: daysParam } = {}) => {
         Pass.find({ ...match, redeemedAt: { $gte: since } }, PASS_FIELDS).lean(),
         Order.find({ status: 'PAID', 'payment.paidAt': { $gte: since } }, 'total refunded payment.paidAt').lean(),
         SosIncident.find({ createdAt: { $gte: since }, $or: [{ eventId: event._id }, { eventId: { $exists: false } }] }, 'type status createdAt acknowledgedAt resolvedAt').lean(),
-        Lodging.find({ ...match, isActive: { $ne: false } }, 'name sector totalBeds availableBeds').lean(),
+        Lodging.find({ ...match, isActive: { $ne: false } }, 'name sector totalBeds heldBeds').lean().then((ls) => nightsLib.attachAvailability(ls, { checkIn: istDate() })),
     ]);
     const openSos = await SosIncident.countDocuments({ status: { $ne: 'RESOLVED' } });
     // Cancellations and refunds in the period, by type (from the passbook Cancel button)
@@ -205,7 +206,7 @@ const ngoOverview = async (user, { providerId, days: daysParam } = {}) => {
     const [issued, redeemed, lodgings] = await Promise.all([
         Pass.find({ providerId: provider._id, createdAt: { $gte: since } }, PASS_FIELDS).lean(),
         Pass.find({ providerId: provider._id, redeemedAt: { $gte: since } }, PASS_FIELDS).lean(),
-        Lodging.find({ providerId: provider._id, isActive: { $ne: false } }, 'name sector totalBeds availableBeds').lean(),
+        Lodging.find({ providerId: provider._id, isActive: { $ne: false } }, 'name sector totalBeds heldBeds').lean().then((ls) => nightsLib.attachAvailability(ls, { checkIn: istDate() })),
     ]);
 
     const rows = dayRows(days, ['checkIns', 'mealsServed', 'tokensIssued', 'bookings']);

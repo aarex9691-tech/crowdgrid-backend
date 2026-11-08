@@ -19,6 +19,7 @@ const Event = require('../modules/event/event.model');
 const Provider = require('../modules/provider/provider.model');
 const { Lodging, LodgingBooking } = require('../modules/lodging/lodging.model');
 const { BedAssignment } = require('../modules/lodging/beds');
+const { LodgingNight } = require('../modules/lodging/nights');
 const { FoodCenter, FoodSlot, MEALS } = require('../modules/food/food.model');
 const { Pass } = require('../modules/pass/pass.model');
 const TransitRoute = require('../modules/transit/transit.model');
@@ -55,7 +56,7 @@ async function main() {
     await require('../utils/dns').connectMongo(mongoose, process.env.MONGO_URI);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
@@ -334,7 +335,7 @@ async function main() {
 
     // ---------- Lodging ----------
     const L = (provider, name, sector, category, beds, available, km, amenities, lat, lng, price = 0) => ({
-        eventId: simhastha._id, providerId: provider._id, name, sector, category, totalBeds: beds, availableBeds: available,
+        eventId: simhastha._id, providerId: provider._id, name, sector, category, totalBeds: beds, heldBeds: beds - available, // `available` = beds bookable online each night
         distanceToGhatKm: km, amenities, location: { lat, lng }, pricePerNight: price,
     });
     const lodgings = await Lodging.insertMany([
@@ -348,10 +349,10 @@ async function main() {
         L(nmc, 'Trimbak Family Tents', SECTORS.TRIMBAK, 'FAMILY_TENT', 300, 141, 1.1, ['Drinking Water', 'Bio-Toilets', 'Charging Point'], 19.9365, 73.5274),
     ]);
 
-    // Beds already taken by walk-in pilgrims get numbers too (bookingId null),
-    // so new online bookings receive the next free tent / bed numbers.
+    // Beds held offline for walk-in pilgrims get numbers too (bookingId null, every night),
+    // so online bookings receive the next free tent / bed numbers.
     await BedAssignment.insertMany(
-        lodgings.flatMap((l) => Array.from({ length: l.totalBeds - l.availableBeds }, (_, i) => ({ lodgingId: l._id, bedNo: i + 1, bookingId: null })))
+        lodgings.flatMap((l) => Array.from({ length: l.heldBeds }, (_, i) => ({ lodgingId: l._id, bedNo: i + 1, bookingId: null, date: null })))
     );
 
     // ---------- Food ----------
@@ -446,7 +447,7 @@ async function main() {
         },
     ]);
     const Lx = (event, provider, name, sector, category, beds, available, km, amenities, lat, lng, price = 0) => ({
-        eventId: event._id, providerId: provider._id, name, sector, category, totalBeds: beds, availableBeds: available,
+        eventId: event._id, providerId: provider._id, name, sector, category, totalBeds: beds, heldBeds: beds - available, // `available` = beds bookable online each night
         distanceToGhatKm: km, amenities, location: { lat, lng }, pricePerNight: price,
     });
     const otherLodgings = await Lodging.insertMany([
@@ -458,7 +459,7 @@ async function main() {
         Lx(rath, puriSeva, 'Gundicha Family Tents', 'Gundicha Temple', 'FAMILY_TENT', 250, 90, 2.8, ['Drinking Water', 'Bio-Toilets', 'Charging Point'], 19.813, 85.834),
     ]);
     await BedAssignment.insertMany(
-        otherLodgings.flatMap((l) => Array.from({ length: l.totalBeds - l.availableBeds }, (_, i) => ({ lodgingId: l._id, bedNo: i + 1, bookingId: null })))
+        otherLodgings.flatMap((l) => Array.from({ length: l.heldBeds }, (_, i) => ({ lodgingId: l._id, bedNo: i + 1, bookingId: null, date: null })))
     );
     const otherCenters = await FoodCenter.insertMany([
         { eventId: wari._id, providerId: wariSeva._id, name: 'Vitthal Annachhatra', sector: 'Temple Precinct', menu: ['Pithla-Bhakri', 'Varan-Bhaat'], diet: 'Pure vegetarian, Ekadashi fasting food on request', location: { lat: 17.6793, lng: 75.3308 } },

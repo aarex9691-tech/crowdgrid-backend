@@ -67,7 +67,9 @@ async function main() {
         const user = { ...me, id: String(me._id) };
 
         // ---- 2. Free camp gets tent + bed numbers ----
-        const freeCamp = await Lodging.findOne({ eventId: event._id, pricePerNight: 0, availableBeds: { $gte: 2 } }).lean();
+        // Free beds are counted per night now, so camps are picked through the search (tonight's availability)
+        const camps = await lodging.search(String(event._id));
+        const freeCamp = camps.find((c) => !c.pricePerNight && c.availableBeds >= 2);
         const b = await lodging.book(freeCamp._id, user, { beds: 2, guestNames: ['A', 'B'] });
         check('Free camp booking has tent and bed numbers', /Bed/.test(b.pass.details.location || ''), b.pass.details.location);
         const assigned = await BedAssignment.countDocuments({ bookingId: b.booking._id });
@@ -80,14 +82,33 @@ async function main() {
         check('Cancelling frees the bed numbers', (await BedAssignment.countDocuments({ bookingId: b.booking._id })) === 0);
 
         // The limit is 5 beds: booking exactly 5 must work (the model once allowed only 4)
-        const bigCamp = await Lodging.findOne({ eventId: event._id, pricePerNight: 0, availableBeds: { $gte: 5 } }).lean();
+        const bigCamp = camps.find((c) => !c.pricePerNight && c.availableBeds >= 5);
         const five = await lodging.book(bigCamp._id, user, { beds: 5, guestNames: ['A', 'B', 'C', 'D', 'E'] });
         check('Booking 5 beds (the limit) works', five.booking.beds === 5 && five.pass.details.bedNumbers.length === 5, five.pass.details.location);
-        await expectError('A 6th bed on the same account is refused', () => lodging.book(bigCamp._id, user, { beds: 1 }), 400, /limit/i);
+        await expectError('A 6th bed on the same night is refused', () => lodging.book(bigCamp._id, user, { beds: 1 }), 400, /limit/i);
+
+        // ---- 2b. Beds are counted night by night ----
+        {
+            const { addDays } = require('../utils/time');
+            const night = five.booking.checkIn;
+            const next = addDays(night, 1);
+            const onNight = (await lodging.search(String(event._id), { checkIn: night })).find((c) => String(c._id) === String(bigCamp._id));
+            const onNext = (await lodging.search(String(event._id), { checkIn: next })).find((c) => String(c._id) === String(bigCamp._id));
+            check('A bed booked for one night is free again the next night', onNext.availableBeds === onNight.availableBeds + 5, `${onNight.availableBeds} tonight, ${onNext.availableBeds} next night`);
+            const nextStay = await lodging.book(bigCamp._id, user, { beds: 5, checkIn: next, checkOut: next });
+            check('The same account can book 5 more beds for a different night', nextStay.booking.beds === 5);
+            check('Next night gets its own bed numbers (same beds may be reused)', nextStay.booking.nights.join() === next);
+            await lodging.cancel(nextStay.booking._id, user);
+            const event2 = await Event.findById(event._id).lean();
+            const lastDay = require('../utils/time').istDate(event2.endDate);
+            if (addDays(night, 8) <= lastDay) {
+                await expectError('Stays longer than 7 nights are refused', () => lodging.book(bigCamp._id, user, { beds: 1, checkIn: night, checkOut: addDays(night, 8) }), 400, /7 nights/);
+            }
+        }
         await lodging.cancel(five.booking._id, user);
 
         // ---- 3. Paid camp must go through checkout ----
-        const paidCamp = await Lodging.findOne({ eventId: event._id, pricePerNight: { $gt: 0 }, availableBeds: { $gte: 2 } }).lean();
+        const paidCamp = camps.find((c) => c.pricePerNight > 0 && c.availableBeds >= 2);
         await expectError('Direct booking of a paid camp asks for payment', () => lodging.book(paidCamp._id, user, { beds: 1 }), 402);
 
         // ---- 4. Order + simulated payment ----
@@ -324,9 +345,11 @@ async function main() {
         const late = await events.register(cEv._id, user, { people: 1 });
         await expectError('A ticket cannot be cancelled after the event starts', () => cancellation.cancel(late.pass._id, user, new Date(startAt.getTime() + 60000)), 400, /already started/);
 
-        const wariBefore = await Lodging.findById(wariCamp._id).lean();
+        const wariStay = { checkIn: wariBook.booking.checkIn, checkOut: wariBook.booking.checkOut };
+        const nightsLib = require('../modules/lodging/nights');
+        const [wariBefore] = await nightsLib.attachAvailability([await Lodging.findById(wariCamp._id).lean()], wariStay);
         await cancellation.cancel(wariBook.pass._id, user);
-        const wariAfter = await Lodging.findById(wariCamp._id).lean();
+        const [wariAfter] = await nightsLib.attachAvailability([await Lodging.findById(wariCamp._id).lean()], wariStay);
         check('Cancelling a stay from the passbook gives the 2 beds back', wariAfter.availableBeds === wariBefore.availableBeds + 2);
 
         const futureSlot = await FoodSlot.findOne({ eventId: wariEv._id, remaining: { $gte: 2 } }).sort({ date: -1 }).lean();

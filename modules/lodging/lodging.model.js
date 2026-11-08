@@ -17,8 +17,9 @@ const lodgingSchema = new mongoose.Schema(
         totalBeds: { type: Number, required: true, min: 0 },
         // Beds per tent / room / hall (default by category, see beds.js)
         bedsPerUnit: { type: Number, min: 1, max: 500 },
-        // Live inventory. Only ever changed with atomic $inc (see lodging.service.js)
-        availableBeds: { type: Number, required: true, min: 0 },
+        // Beds kept offline every night (walk-ins, staff). The rest are booked online
+        // night by night: see nights.js (free on a night = totalBeds - heldBeds - booked).
+        heldBeds: { type: Number, default: 0, min: 0 },
         isActive: { type: Boolean, default: true },
     },
     { timestamps: true }
@@ -35,6 +36,7 @@ const bookingSchema = new mongoose.Schema(
         guestNames: [String],
         checkIn: { type: String, required: true }, // YYYY-MM-DD (IST)
         checkOut: { type: String, required: true },
+        nights: [String], // the nights this stay uses (checkIn .. checkOut - 1)
         status: { type: String, enum: ['CONFIRMED', 'CANCELLED'], default: 'CONFIRMED' },
         passId: { type: mongoose.Schema.Types.ObjectId, ref: 'Pass' },
         // Allocated bed numbers (1..totalBeds) and their label, e.g. "Tent T-4 · Beds 7, 8"

@@ -6,10 +6,12 @@ const { conflict } = require('../../utils/httpError');
  *
  * A camp's beds are numbered 1..totalBeds and grouped into units of
  * `bedsPerUnit` (bed 1-10 = Tent T-1, bed 11-20 = Tent T-2, ...).
- * Every allocated bed is one BedAssignment document. A UNIQUE index on
- * (lodgingId, bedNo) means two bookings can never hold the same bed, even when
- * they are made at the same instant: the second insert is rejected and simply
- * retries with the next free beds.
+ * Every bed a booking uses on a night is one BedAssignment document
+ * { bedNo, date }. Beds held offline (walk-ins) have no date: they are taken
+ * every night. A UNIQUE index on (lodgingId, bedNo, date) means two bookings can
+ * never hold the same bed on the same night, even when they are made at the same
+ * instant: the second insert is rejected and simply retries with other beds.
+ * A booking keeps the SAME bed numbers for every night of its stay.
  */
 const UNIT_BY_CATEGORY = {
     FAMILY_TENT: { label: 'Tent', prefix: 'T', size: 6 },
@@ -28,10 +30,12 @@ const bedAssignmentSchema = new mongoose.Schema(
         lodgingId: { type: mongoose.Schema.Types.ObjectId, ref: 'Lodging', required: true },
         bedNo: { type: Number, required: true, min: 1 }, // 1..totalBeds across the whole camp
         bookingId: { type: mongoose.Schema.Types.ObjectId, ref: 'LodgingBooking', default: null }, // null = held offline (seed / walk-in)
+        date: { type: String, default: null }, // night YYYY-MM-DD; null = held offline on every night
     },
     { timestamps: true }
 );
-bedAssignmentSchema.index({ lodgingId: 1, bedNo: 1 }, { unique: true });
+bedAssignmentSchema.index({ lodgingId: 1, bedNo: 1, date: 1 }, { unique: true });
+bedAssignmentSchema.index({ lodgingId: 1, date: 1 });
 bedAssignmentSchema.index({ bookingId: 1 });
 const BedAssignment = mongoose.model('BedAssignment', bedAssignmentSchema);
 
@@ -94,18 +98,23 @@ const pickBeds = (lodging, taken, count, spread = false) => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Allocates beds for a booking. Called AFTER the atomic availableBeds claim, so
+ * Allocates beds for a booking. Called AFTER the atomic per-night claim (nights.js), so
  * enough beds are known to be free; the unique index settles any race between
  * two bookings picking the same numbers at the same moment (the loser retries).
  */
-const allocate = async (lodging, bookingId, count, attempts = 40) => {
+/** Bed numbers in use on any of these nights (offline holds count on every night). */
+const takenOn = async (lodgingId, dates) =>
+    new Set((await BedAssignment.find({ lodgingId, $or: [{ date: null }, { date: { $in: dates } }] }, 'bedNo').lean()).map((b) => b.bedNo));
+
+const allocate = async (lodging, bookingId, count, dates, attempts = 40) => {
     for (let i = 0; i < attempts; i++) {
-        const taken = new Set((await BedAssignment.find({ lodgingId: lodging._id }, 'bedNo').lean()).map((b) => b.bedNo));
+        const taken = await takenOn(lodging._id, dates);
         const beds = pickBeds(lodging, taken, count, i > 0);
         if (!beds) break;
         try {
+            // the same beds on every night of the stay
             await BedAssignment.insertMany(
-                beds.map((bedNo) => ({ lodgingId: lodging._id, bedNo, bookingId })),
+                dates.flatMap((date) => beds.map((bedNo) => ({ lodgingId: lodging._id, bedNo, bookingId, date }))),
                 { ordered: true }
             );
             return beds;
@@ -121,4 +130,4 @@ const allocate = async (lodging, bookingId, count, attempts = 40) => {
 
 const release = (bookingId, session) => BedAssignment.deleteMany({ bookingId }, { session });
 
-module.exports = { BedAssignment, UNIT_BY_CATEGORY, unitFor, locate, describe, pickBeds, allocate, release };
+module.exports = { BedAssignment, UNIT_BY_CATEGORY, unitFor, locate, describe, pickBeds, allocate, release, takenOn };

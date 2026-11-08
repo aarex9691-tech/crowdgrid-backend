@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Event = require('./event.model');
 const Provider = require('../provider/provider.model');
 const { groupSize, MAX_PER_ACCOUNT } = require('../../utils/limits');
+const nightsLib = require('../lodging/nights');
 const { Lodging } = require('../lodging/lodging.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
@@ -37,10 +38,16 @@ const list = async ({ kind } = {}) => {
             { $match: { eventId: { $in: yatraIds }, verificationStatus: 'VERIFIED' } },
             { $group: { _id: '$eventId', count: { $sum: 1 } } },
         ]),
-        Lodging.aggregate([
-            { $match: { eventId: { $in: yatraIds }, isActive: true } },
-            { $group: { _id: '$eventId', total: { $sum: '$totalBeds' }, available: { $sum: '$availableBeds' } } },
-        ]),
+        // free beds on each yatra's next night (today, or its first night if it has not started)
+        Lodging.find({ eventId: { $in: yatraIds }, isActive: true }, 'eventId totalBeds heldBeds').lean().then(async (ls) => {
+            const by = new Map();
+            for (const e of events.filter((x) => x.kind === 'YATRA')) {
+                const mineL = ls.filter((l) => String(l.eventId) === String(e._id));
+                await nightsLib.attachAvailability(mineL, { checkIn: nightsLib.defaultNight(e) });
+                by.set(String(e._id), { _id: e._id, total: mineL.reduce((s, l) => s + (l.totalBeds || 0), 0), available: mineL.reduce((s, l) => s + l.availableBeds, 0) });
+            }
+            return [...by.values()];
+        }),
     ]);
     const campMap = new Map(camps.map((c) => [String(c._id), c.count]));
     const bedMap = new Map(beds.map((b) => [String(b._id), b]));

@@ -7,6 +7,7 @@ const SosIncident = require('../sos/sos.model');
 const { VolunteerApplication } = require('../volunteer/volunteer.model');
 const LostFoundReport = require('../lostfound/lostfound.model');
 const { istDate, istDateTime } = require('../../utils/time');
+const nightsLib = require('../lodging/nights');
 
 /** District operations overview: occupancy by sector, meal tokens, scans, alerts. */
 const overview = async (eventId) => {
@@ -15,11 +16,21 @@ const overview = async (eventId) => {
     const startOfDay = istDateTime(today, '00:00');
 
     const [occupancy, meals, passesIssued, scansToday, openSos, pendingProviders, pendingVolunteers, openMissing] = await Promise.all([
-        Lodging.aggregate([
-            { $match: { ...match, isActive: true } },
-            { $group: { _id: '$sector', total: { $sum: '$totalBeds' }, available: { $sum: '$availableBeds' }, camps: { $sum: 1 } } },
-            { $sort: { _id: 1 } },
-        ]),
+        // tonight's free beds per sector (availability is counted night by night)
+        Lodging.find({ ...match, isActive: true }, 'sector totalBeds heldBeds')
+            .lean()
+            .then((ls) => nightsLib.attachAvailability(ls, { checkIn: today }))
+            .then((ls) => {
+                const by = new Map();
+                for (const l of ls) {
+                    const g = by.get(l.sector) || { _id: l.sector, total: 0, available: 0, camps: 0 };
+                    g.total += l.totalBeds || 0;
+                    g.available += l.availableBeds;
+                    g.camps += 1;
+                    by.set(l.sector, g);
+                }
+                return [...by.values()].sort((a, b) => String(a._id).localeCompare(String(b._id)));
+            }),
         FoodSlot.aggregate([
             { $match: { ...match, date: today } },
             { $group: { _id: '$meal', capacity: { $sum: '$capacity' }, remaining: { $sum: '$remaining' } } },

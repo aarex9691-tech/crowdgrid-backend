@@ -6,6 +6,14 @@ const connectDB = async () => {
     try {
         const conn = await connectMongo(mongoose, process.env.MONGO_URI);
         console.log(`MongoDB connected: ${conn.connection.host}`);
+        // Bed numbers are now per night: replace the old one-booking-per-bed index with
+        // (camp, bed, night) and create the per-night counters' index
+        try {
+            await require('../modules/lodging/beds').BedAssignment.syncIndexes();
+            await require('../modules/lodging/nights').LodgingNight.syncIndexes();
+        } catch (e) {
+            console.warn(`Index update skipped: ${e.message}`);
+        }
         const tx = await detectTransactionSupport();
         console.log(
             tx
