@@ -296,6 +296,26 @@ async function main() {
             await expectError('An invalid report saves no photo', () => lostfound.create(user, { ...missing }, { buffer: png }), 400, /gender/i);
             check('No orphan photos after refused reports', (await Photo.countDocuments({ uploadedBy: me._id })) === before);
         }
+        {
+            // SOS: the pilgrim picks the kind of help, sees who is coming, and can say "I'm safe now"
+            const sosSvc = require('../modules/sos/sos.service');
+            const SosIncident = require('../modules/sos/sos.model');
+            await SosIncident.deleteMany({ userId: me._id });
+            await expectError('An unknown SOS type is refused', () => sosSvc.raise(user, { eventId: String(event._id), type: 'ALIENS' }), 400, /kind of help/);
+            const s1 = await sosSvc.raise(user, { eventId: String(event._id), type: 'medical', message: 'Father fainted', lat: 19.95, lng: 73.84 });
+            check('SOS keeps the chosen type and message', s1.incident.type === 'MEDICAL' && s1.incident.message === 'Father fainted');
+            const s2 = await sosSvc.raise(user, { eventId: String(event._id), type: 'CROWD' });
+            check('Pressing again updates the same alert and can change its type', s2.updated && String(s2.incident._id) === String(s1.incident._id) && s2.incident.type === 'CROWD');
+            const authority = await User.findOne({ role: 'AUTHORITY' }).lean();
+            const vol = await User.findOne({ role: 'VOLUNTEER', isActive: true }).lean();
+            await sosSvc.update(String(s1.incident._id), authority, { status: 'ACKNOWLEDGED', assignedTo: String(vol._id) });
+            const [mineNow] = await sosSvc.mine(me._id);
+            check('My SOS shows it was seen and who is coming', mineNow.status === 'ACKNOWLEDGED' && !!mineNow.acknowledgedAt && mineNow.assignedTo?.name === vol.name, mineNow.assignedTo?.name);
+            const closed = await sosSvc.closeMine(String(s1.incident._id), user);
+            check('"I\'m safe now" closes the alert', closed.status === 'RESOLVED' && closed.closedByUser === true);
+            await expectError('A closed alert cannot be closed again', () => sosSvc.closeMine(String(s1.incident._id), user), 404);
+            await SosIncident.deleteMany({ userId: me._id });
+        }
         const publicView = await lostfound.list(null, { kind: 'MISSING' });
         const shown = publicView.find((r) => String(r._id) === String(rep._id));
         check('Phone numbers are hidden from the public bulletin', shown && !shown.contactPhone && !shown.personPhone);

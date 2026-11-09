@@ -12,6 +12,16 @@ router.get('/mine', requireAuth, async (req, res) => {
     res.json(await sos.mine(req.user._id));
 });
 
+// Volunteers who can be assigned (control room)
+router.get('/responders', requireAuth, requirePermission('sos:manage'), async (req, res) => {
+    res.json(await sos.responders());
+});
+
+// The pilgrim says they are safe: closes their own alert
+router.post('/:id/safe', requireAuth, async (req, res) => {
+    res.json(await sos.closeMine(req.params.id, req.user));
+});
+
 router.get('/', requireAuth, requirePermission('sos:view'), async (req, res) => {
     res.json(await sos.list(req.user, { status: req.query.status && String(req.query.status), eventId: req.query.eventId && String(req.query.eventId) }));
 });

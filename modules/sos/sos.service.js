@@ -15,7 +15,22 @@ const num = (v) => (v === undefined || v === null || v === '' ? undefined : Numb
  * minutes, pressing again updates its live location instead of creating a
  * duplicate, so the control room tracks one incident per person.
  */
-const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) => {
+const cleanType = (type) => {
+    if (type === undefined || type === null || type === '') return undefined;
+    const t = String(type).toUpperCase();
+    if (!SosIncident.SOS_TYPES.includes(t)) throw badRequest('Choose what kind of help you need');
+    return t;
+};
+const cleanMessage = (message) => {
+    if (message === undefined || message === null) return undefined;
+    const m = String(message).trim();
+    if (m.length > 300) throw badRequest('Keep the message under 300 characters');
+    return m || undefined;
+};
+
+const raise = async (user, { eventId, lat, lng, accuracy, type: rawType, message: rawMessage } = {}) => {
+    const type = cleanType(rawType);
+    const message = cleanMessage(rawMessage);
     const location = { lat: num(lat), lng: num(lng), accuracy: num(accuracy) };
     const hasGps = Number.isFinite(location.lat) && Number.isFinite(location.lng);
     if (hasGps && (Math.abs(location.lat) > 90 || Math.abs(location.lng) > 180)) throw badRequest('Invalid coordinates');
@@ -33,6 +48,7 @@ const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) 
             if (recent.locationHistory.length > MAX_HISTORY) recent.locationHistory.splice(0, recent.locationHistory.length - MAX_HISTORY);
         }
         if (message) recent.message = message;
+        if (type) recent.type = type; // the pilgrim can correct what kind of help they need
         await recent.save();
         realtime.notify(['control', 'volunteers'], 'sos', { action: 'location', id: String(recent._id) });
         return { incident: recent.toObject(), updated: true };
@@ -51,7 +67,24 @@ const raise = async (user, { eventId, lat, lng, accuracy, type, message } = {}) 
     return { incident: incident.toObject(), updated: false };
 };
 
-const mine = async (userId) => SosIncident.find({ userId }).sort({ createdAt: -1 }).limit(10).lean();
+/** The pilgrim's own alerts, newest first, with the volunteer's name once one is assigned. */
+const mine = async (userId) =>
+    SosIncident.find({ userId }, '-locationHistory').populate('assignedTo', 'name').sort({ createdAt: -1 }).limit(10).lean();
+
+/** "I'm safe now": the pilgrim closes their own open alert. */
+const closeMine = async (id, user) => {
+    if (!mongoose.isValidObjectId(id)) throw notFound('Alert not found');
+    const incident = await SosIncident.findOneAndUpdate(
+        { _id: id, userId: user._id, status: { $ne: 'RESOLVED' } },
+        { $set: { status: 'RESOLVED', resolvedAt: new Date(), closedByUser: true } },
+        { returnDocument: 'after' }
+    ).lean();
+    if (!incident) throw notFound('No open alert to close');
+    audit.record({ actor: user, action: 'SOS_CLOSED_BY_USER', targetType: 'SosIncident', targetId: incident._id, summary: `${user.name} said they are safe now` });
+    realtime.notify(['control', 'volunteers', `user:${user._id}`], 'sos', { action: 'updated', id: String(incident._id), status: 'RESOLVED' });
+    if (incident.location?.lat !== undefined) realtime.notify(['public'], 'route', {});
+    return incident;
+};
 
 /** Control room list. Volunteers see only incidents assigned to them. */
 const list = async (viewer, { status, eventId } = {}) => {
@@ -103,4 +136,7 @@ const update = async (id, viewer, { status, assignedTo } = {}) => {
     return incident.toObject();
 };
 
-module.exports = { raise, mine, list, update };
+/** Volunteers the control room can send to an alert. */
+const responders = async () => User.find({ role: ROLES.VOLUNTEER, isActive: true }, 'name').sort({ name: 1 }).limit(200).lean();
+
+module.exports = { raise, mine, closeMine, list, update, responders };
