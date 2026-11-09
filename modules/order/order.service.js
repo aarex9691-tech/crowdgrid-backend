@@ -26,8 +26,9 @@ const priceItem = async (raw, user) => {
             checkIn: raw.input?.checkIn && String(raw.input.checkIn),
             checkOut: raw.input?.checkOut && String(raw.input.checkOut),
             guestNames: Array.isArray(raw.input?.guestNames) ? raw.input.guestNames.map((n) => String(n).slice(0, 60)).slice(0, 5) : [], // one name per bed, up to 5
+            ...(Array.isArray(raw.input?.bedNos) ? { bedNos: raw.input.bedNos.slice(0, 5).map(Number) } : {}), // beds chosen on the map
         };
-        const q = await lodging.quote(refId, input);
+        const q = await lodging.quote(refId, input, { requireNames: true });
         return { kind, refId, input: { ...input, ...q.stay }, label: q.label, detail: q.detail, amount: q.amount };
     }
     if (kind === 'TRANSIT') {

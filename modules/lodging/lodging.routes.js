@@ -28,8 +28,14 @@ router.get('/bookings/mine', requireAuth, async (req, res) => {
     res.json(await lodging.mine(req.user._id));
 });
 
+// Tents and beds free for a stay, for the pilgrim to pick (?checkIn=&checkOut=); no names shown
+router.get('/:id/stay-map', async (req, res) => {
+    const q = req.query;
+    res.json(await lodging.stayMap(req.params.id, { checkIn: typeof q.checkIn === 'string' ? q.checkIn : undefined, checkOut: typeof q.checkOut === 'string' ? q.checkOut : undefined }));
+});
+
 router.post('/:id/book', requireAuth, requirePermission('booking:create'), async (req, res) => {
-    res.status(201).json(await lodging.book(req.params.id, req.user, req.body || {}));
+    res.status(201).json(await lodging.book(req.params.id, req.user, req.body || {}, { requireNames: true }));
 });
 
 router.post('/bookings/:id/cancel', requireAuth, async (req, res) => {

@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { conflict } = require('../../utils/httpError');
+const { badRequest, conflict } = require('../../utils/httpError');
 
 /**
  * Tent / room / hall numbers for lodging bookings.
@@ -14,8 +14,9 @@ const { conflict } = require('../../utils/httpError');
  * A booking keeps the SAME bed numbers for every night of its stay.
  */
 const UNIT_BY_CATEGORY = {
-    FAMILY_TENT: { label: 'Tent', prefix: 'T', size: 6 },
-    FREE_CAMP: { label: 'Tent', prefix: 'T', size: 20 },
+    // A tent sleeps 5: one family / group per tent, one name per bed
+    FAMILY_TENT: { label: 'Tent', prefix: 'T', size: 5 },
+    FREE_CAMP: { label: 'Tent', prefix: 'T', size: 5 },
     DHARAMSHALA: { label: 'Room', prefix: 'R', size: 10 },
     SENIOR_DORM: { label: 'Dorm', prefix: 'D', size: 12 },
     ASHRAM: { label: 'Hall', prefix: 'H', size: 25 },
@@ -128,6 +129,39 @@ const allocate = async (lodging, bookingId, count, dates, attempts = 40) => {
     throw conflict('Could not allocate bed numbers, please try again');
 };
 
+/** Checks the beds a pilgrim picked on the map: `count` different beds of this camp. */
+const checkChosen = (lodging, bedNos, count) => {
+    if (!Array.isArray(bedNos)) throw badRequest('Choose your beds on the map');
+    const nums = bedNos.map(Number);
+    const bad = nums.length !== count || nums.some((n) => !Number.isInteger(n) || n < 1 || n > lodging.totalBeds) || new Set(nums).size !== nums.length;
+    if (bad) throw badRequest(`Choose ${count} different bed${count > 1 ? 's' : ''} on the map`);
+    return nums.sort((a, b) => a - b);
+};
+
+/**
+ * Gives the booking exactly the beds the pilgrim chose, on every night of the stay.
+ * If one of them was taken a moment ago (or is held for walk-ins) nothing is kept and
+ * the pilgrim is asked to choose again; the unique index settles a race.
+ */
+const allocateChosen = async (lodging, bookingId, bedNos, dates) => {
+    const fail = (beds) =>
+        conflict(`${describe(lodging, beds).text} ${beds.length > 1 ? 'were' : 'was'} just taken for these dates. Please choose other beds.`, { takenBeds: beds });
+    const taken = await takenOn(lodging._id, dates);
+    const clash = bedNos.filter((n) => taken.has(n));
+    if (clash.length) throw fail(clash);
+    try {
+        await BedAssignment.insertMany(
+            dates.flatMap((date) => bedNos.map((bedNo) => ({ lodgingId: lodging._id, bedNo, bookingId, date }))),
+            { ordered: true }
+        );
+        return bedNos;
+    } catch (err) {
+        await BedAssignment.deleteMany({ bookingId });
+        if (err.code === 11000) throw fail(bedNos);
+        throw err;
+    }
+};
+
 const release = (bookingId, session) => BedAssignment.deleteMany({ bookingId }, { session });
 
-module.exports = { BedAssignment, UNIT_BY_CATEGORY, unitFor, locate, describe, pickBeds, allocate, release, takenOn };
+module.exports = { BedAssignment, UNIT_BY_CATEGORY, unitFor, locate, describe, pickBeds, allocate, allocateChosen, checkChosen, release, takenOn };

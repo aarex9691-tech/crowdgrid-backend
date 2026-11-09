@@ -116,6 +116,29 @@ async function main() {
         }
         await lodging.cancel(five.booking._id, user);
 
+        // ---- 2c. Pilgrims choose their own tent and beds (5 people per tent) ----
+        {
+            const { addDays } = require('../utils/time');
+            const night = addDays(five.booking.checkIn, 2);
+            const map = await lodging.stayMap(String(bigCamp._id), { checkIn: night, checkOut: night });
+            check('Stay map shows tents of 5 beds', map.unit.size === 5 && map.units.every((u) => u.beds.length <= 5), `${map.units.length} ${map.unit.label.toLowerCase()}s`);
+            const tent = map.units.find((u) => u.free >= 2);
+            const pick = tent.beds.filter((b) => b.free).slice(0, 2).map((b) => b.bedNo);
+            const mine = await lodging.book(bigCamp._id, user, { beds: 2, bedNos: pick, guestNames: ['Asha Patil', 'Ravi Patil'], checkIn: night, checkOut: night }, { requireNames: true });
+            check('The chosen beds are exactly the ones booked', mine.booking.bedNos.join() === [...pick].sort((a, b) => a - b).join(), mine.booking.bedLabel);
+            const after = await lodging.stayMap(String(bigCamp._id), { checkIn: night, checkOut: night });
+            check('Chosen beds now show as taken on the map', pick.every((n) => after.units.flatMap((u) => u.beds).find((b) => b.bedNo === n).free === false));
+            const other = await User.findOne({ phone: '9000000007' }).lean();
+            await expectError('Someone else choosing the same bed that night is refused', () => lodging.book(bigCamp._id, { ...other, id: String(other._id) }, { beds: 1, bedNos: [pick[0]], guestNames: ['Sunita D'], checkIn: night, checkOut: night }), 409, /just taken|already taken/);
+            const nextNight = addDays(night, 1);
+            const sameBedNext = await lodging.book(bigCamp._id, { ...other, id: String(other._id) }, { beds: 1, bedNos: [pick[0]], guestNames: ['Sunita D'], checkIn: nextNight, checkOut: nextNight });
+            check('The same bed can be chosen for the next night', sameBedNext.booking.bedNos[0] === pick[0]);
+            await expectError('Booking from the app needs a name for every person', () => lodging.book(bigCamp._id, user, { beds: 2, guestNames: ['Only One'], checkIn: night, checkOut: night }, { requireNames: true }), 400, /name of each person/);
+            await expectError('Choosing a bed number that does not exist is refused', () => lodging.book(bigCamp._id, user, { beds: 1, bedNos: [999999], guestNames: ['X Y'], checkIn: night, checkOut: night }), 400, /different bed/);
+            await lodging.cancel(mine.booking._id, user);
+            await lodging.cancel(sameBedNext.booking._id, { ...other, id: String(other._id) });
+        }
+
         // ---- 3. Paid camp must go through checkout ----
         const paidCamp = camps.find((c) => c.pricePerNight > 0 && c.availableBeds >= 2);
         await expectError('Direct booking of a paid camp asks for payment', () => lodging.book(paidCamp._id, user, { beds: 1 }), 402);

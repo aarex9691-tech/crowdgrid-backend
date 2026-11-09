@@ -53,6 +53,42 @@ const parseStay = (event, checkIn, checkOut) => {
     return { checkIn: inDate, checkOut: outDate, nights };
 };
 
+/** One full name per bed (people staying in the tent). */
+const guestNamesFor = (guestNames, count) => {
+    const names = (Array.isArray(guestNames) ? guestNames : []).map((n) => String(n).trim()).filter(Boolean);
+    if (names.length !== count) throw badRequest(`Enter the name of each person staying (${count} name${count > 1 ? 's' : ''})`);
+    if (names.some((n) => n.length < 2 || n.length > 60)) throw badRequest('Each guest name must be 2 to 60 characters');
+    return names;
+};
+
+/**
+ * Tents and beds of one camp for a stay, for the pilgrim to choose from.
+ * A bed counts as free only if it is free on EVERY night of the stay. No names are shown.
+ */
+const stayMap = async (lodgingId, { checkIn, checkOut } = {}) => {
+    if (!mongoose.isValidObjectId(lodgingId)) throw badRequest('Invalid camp');
+    const lodging = await Lodging.findById(lodgingId).populate('providerId', 'name verificationStatus').lean();
+    if (!lodging || !lodging.isActive) throw notFound('Camp not found');
+    if (lodging.providerId?.verificationStatus !== 'VERIFIED') throw forbidden('This camp is not verified yet');
+    const event = await Event.findById(lodging.eventId).lean();
+    const stay = parseStay(event, checkIn, checkOut);
+    const taken = await bedAlloc.takenOn(lodging._id, stay.nights);
+    const unit = bedAlloc.unitFor(lodging);
+    const units = [];
+    for (let u = 1; u <= Math.ceil(lodging.totalBeds / unit.size); u++) {
+        const beds = [];
+        for (let n = (u - 1) * unit.size + 1; n <= Math.min(u * unit.size, lodging.totalBeds); n++) beds.push({ bedNo: n, bed: n - (u - 1) * unit.size, free: !taken.has(n) });
+        units.push({ unitNo: u, label: `${unit.label} ${unit.prefix}-${u}`, beds, free: beds.filter((b) => b.free).length });
+    }
+    return {
+        lodging: { _id: lodging._id, name: lodging.name, category: lodging.category, pricePerNight: lodging.pricePerNight || 0 },
+        stay: { checkIn: stay.checkIn, checkOut: stay.checkOut, nights: stay.nights.length },
+        unit: { label: unit.label, size: unit.size },
+        free: units.reduce((s, x) => s + x.free, 0),
+        units,
+    };
+};
+
 /** Nights between two YYYY-MM-DD dates (a same-day stay counts as one night). */
 const nightsBetween = (checkIn, checkOut) => nightsLib.nightsOf(checkIn, checkOut).length;
 
@@ -60,7 +96,7 @@ const nightsBetween = (checkIn, checkOut) => nightsLib.nightsOf(checkIn, checkOu
  * Price check for the cart: validates the request exactly like a booking would,
  * without writing anything. Price is always computed here, never sent by the browser.
  */
-const quote = async (lodgingId, { beds, checkIn, checkOut } = {}) => {
+const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } = {}, { requireNames = false } = {}) => {
     const count = Number(beds);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BEDS_PER_USER) {
         throw badRequest(`You can book between 1 and ${MAX_BEDS_PER_USER} beds`);
@@ -75,12 +111,22 @@ const quote = async (lodgingId, { beds, checkIn, checkOut } = {}) => {
     if (lodging.availableBeds < count) {
         throw conflict(lodging.availableBeds === 0 ? 'Sold out for these dates - no beds left at this camp' : `Only ${lodging.availableBeds} bed(s) left for these dates`);
     }
+    if (requireNames) guestNamesFor(guestNames, count);
+    // Beds chosen on the map must still be free on every night of the stay
+    let where = null;
+    if (bedNos !== undefined && bedNos !== null) {
+        const chosen = bedAlloc.checkChosen(lodging, bedNos, count);
+        const taken = await bedAlloc.takenOn(lodging._id, stay.nights);
+        const clash = chosen.filter((n) => taken.has(n));
+        if (clash.length) throw conflict(`${bedAlloc.describe(lodging, clash).text} ${clash.length > 1 ? 'are' : 'is'} already taken for these dates. Please choose other beds.`, { takenBeds: clash });
+        where = bedAlloc.describe(lodging, chosen).text;
+    }
     const nights = stay.nights.length;
     const unitPrice = lodging.pricePerNight || 0;
     return {
         lodging,
         label: lodging.name,
-        detail: `${count} bed${count > 1 ? 's' : ''} x ${nights} night${nights > 1 ? 's' : ''} x ₹${unitPrice} - ${stay.checkIn === stay.checkOut ? stay.checkIn : `${stay.checkIn} to ${stay.checkOut}`}`,
+        detail: `${where ? `${where} · ` : ''}${count} bed${count > 1 ? 's' : ''} x ${nights} night${nights > 1 ? 's' : ''} x ₹${unitPrice} - ${stay.checkIn === stay.checkOut ? stay.checkIn : `${stay.checkIn} to ${stay.checkOut}`}`,
         amount: unitPrice * count * nights,
         stay: { checkIn: stay.checkIn, checkOut: stay.checkOut },
     };
@@ -100,12 +146,13 @@ const quote = async (lodgingId, { beds, checkIn, checkOut } = {}) => {
  * The claims run outside the transaction on purpose: single-document updates are
  * already atomic, and keeping them out avoids write-conflict retries under load.
  */
-const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut } = {}, { paidByOrder = null } = {}) => {
+const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut, bedNos } = {}, { paidByOrder = null, requireNames = false } = {}) => {
     const count = Number(beds);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BEDS_PER_USER) {
         throw badRequest(`You can book between 1 and ${MAX_BEDS_PER_USER} beds`);
     }
-    const names = (Array.isArray(guestNames) ? guestNames : []).map((n) => String(n).trim()).filter(Boolean);
+    // Bookings from the app need one name per person; older callers may leave names out
+    const names = requireNames ? guestNamesFor(guestNames, count) : (Array.isArray(guestNames) ? guestNames : []).map((n) => String(n).trim()).filter(Boolean);
     if (names.length && names.length !== count) throw badRequest('Enter one guest name per bed');
 
     const lodging = await Lodging.findById(lodgingId).populate('providerId', 'name verificationStatus').lean();
@@ -120,6 +167,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
     const event = await Event.findById(lodging.eventId).lean();
     const stay = parseStay(event, checkIn, checkOut);
     const dates = stay.nights;
+    const chosen = bedNos !== undefined && bedNos !== null ? bedAlloc.checkChosen(lodging, bedNos, count) : null;
 
     // Per-person cap: at most 5 beds on any one night (stays on other nights don't count)
     const mineHere = await LodgingBooking.find({ userId: user._id, eventId: lodging.eventId, status: 'CONFIRMED' }, 'beds checkIn checkOut nights').lean();
@@ -133,20 +181,20 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut 
 
     // 2. Number the beds (tent + bed), the same beds every night
     const bookingId = new mongoose.Types.ObjectId();
-    let bedNos;
+    let bedNumbers;
     try {
-        bedNos = await bedAlloc.allocate(lodging, bookingId, count, dates);
+        bedNumbers = chosen ? await bedAlloc.allocateChosen(lodging, bookingId, chosen, dates) : await bedAlloc.allocate(lodging, bookingId, count, dates);
     } catch (err) {
         await nightsLib.releaseNights(lodging._id, dates, count);
         throw err;
     }
-    const where = bedAlloc.describe(lodging, bedNos);
+    const where = bedAlloc.describe(lodging, bedNumbers);
 
     // 3. Write booking + pass together; give the nights and beds back if this fails
     try {
         const result = await withTransaction(async (session) => {
             const [booking] = await LodgingBooking.create(
-                [{ _id: bookingId, lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, bedNos, bedLabel: where.text, checkIn: stay.checkIn, checkOut: stay.checkOut, nights: dates }],
+                [{ _id: bookingId, lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, bedNos: bedNumbers, bedLabel: where.text, checkIn: stay.checkIn, checkOut: stay.checkOut, nights: dates }],
                 { session }
             );
             const pass = await issuePass(
@@ -284,4 +332,4 @@ const bedMap = async (lodgingId, user, { date } = {}) => {
     };
 };
 
-module.exports = { search, quote, book, cancel, mine, bedMap, MAX_BEDS_PER_USER, nightsBetween };
+module.exports = { search, quote, book, cancel, mine, bedMap, stayMap, MAX_BEDS_PER_USER, nightsBetween };
