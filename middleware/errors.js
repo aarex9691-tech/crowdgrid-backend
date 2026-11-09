@@ -23,6 +23,12 @@ const errorHandler = (err, req, res, next) => {
     if (err.name === 'MulterError') {
         return res.status(400).json({ message: err.message });
     }
+    // The link to MongoDB Atlas dropped (unstable Wi-Fi, VPN, antivirus HTTPS scanning...).
+    // Say so plainly instead of a generic 500; the next request usually works.
+    if (/^Mongo(Network|ServerSelection|NetworkTimeout|PoolCleared)Error$/.test(err.name) || ['ECONNRESET', 'ETIMEDOUT', 'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC'].includes(err.code || err.cause?.code)) {
+        console.warn(`[db] ${req.method} ${req.originalUrl}: lost the database connection (${err.code || err.cause?.code || err.name})`);
+        return res.status(503).json({ message: 'Lost the connection to the database for a moment. Please try again in a few seconds.', retry: true });
+    }
     console.error(err);
     res.status(500).json({ message: 'Something went wrong on the server' });
 };

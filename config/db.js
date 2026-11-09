@@ -4,7 +4,16 @@ const { detectTransactionSupport } = require('../utils/tx');
 
 const connectDB = async () => {
     try {
-        const conn = await connectMongo(mongoose, process.env.MONGO_URI);
+        const conn = await connectMongo(mongoose, process.env.MONGO_URI, {
+            // Steadier link to Atlas on home / college networks:
+            family: 4, // IPv4 only (broken IPv6 routes cause resets on some networks)
+            maxIdleTimeMS: 60000, // close idle sockets before routers or antivirus silently cut them
+            serverSelectionTimeoutMS: 15000,
+            socketTimeoutMS: 45000,
+            heartbeatFrequencyMS: 10000,
+            retryReads: true, // a read cut off by the network is retried once automatically
+            retryWrites: true,
+        });
         console.log(`MongoDB connected: ${conn.connection.host}`);
         // Bed numbers are now per night: replace the old one-booking-per-bed index with
         // (camp, bed, night) and create the per-night counters' index
