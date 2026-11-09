@@ -28,6 +28,13 @@ const PILGRIMS = 200;
 const BEDS = 10;
 const TAG = `cgtest-${Date.now()}`;
 
+/** "message" x count for the rejected bookings, so a FAIL says why. */
+const reasons = (results) => {
+    const m = new Map();
+    for (const r of results) if (r.status === 'rejected') m.set(r.reason.message, (m.get(r.reason.message) || 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([msg, n]) => `    ${n} x ${msg}`).join('\n');
+};
+
 async function main() {
     await require('../utils/dns').connectMongo(mongoose, require('./test-db').testDbUri());
     const tx = await detectTransactionSupport();
@@ -71,6 +78,7 @@ async function main() {
         const distinctBeds = new Set(assigned.map((a) => a.bedNo)).size;
         console.log(`  bed numbers given   : ${assigned.length} (${distinctBeds} different)`);
         const pass1 = ok === BEDS && after.availableBeds === 0 && bookings === BEDS && other.length === 0 && assigned.length === BEDS && distinctBeds === BEDS;
+        if (!pass1) console.log(`  why refused:\n${reasons(results)}`);
         console.log(pass1 ? '  PASS - no double booking\n' : '  FAIL\n');
 
         // ---- Test 1b: the same camp, the NEXT night ----
@@ -87,6 +95,7 @@ async function main() {
         console.log(`  booked that night   : ${night2?.booked}`);
         console.log(`  bed numbers given   : ${beds2.length} (${new Set(beds2.map((a) => a.bedNo)).size} different)`);
         const pass1b = ok2 === BEDS && night2?.booked === BEDS && other2.length === 0 && new Set(beds2.map((a) => a.bedNo)).size === BEDS;
+        if (!pass1b) console.log(`  why refused:\n${reasons(results2)}`);
         console.log(pass1b ? '  PASS - each night is counted on its own, still no double booking\n' : '  FAIL\n');
 
         // ---- Test 2: one pilgrim, 20 simultaneous lunch claims ----
