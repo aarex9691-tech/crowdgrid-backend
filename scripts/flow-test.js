@@ -52,6 +52,7 @@ async function main() {
     let hostedId;
     let freeId;
     const groupIds = []; // events created by the group-ticket checks
+    let finished = false; // false if a step threw before the end
     try {
         // ---- 1. Phone numbers ----
         await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'Test Pilgrim', phone: '900000000612', password: 'Crowd@123' }), 400, /mobile number/i);
@@ -79,7 +80,7 @@ async function main() {
         // Free beds are counted per night now, so camps are picked through the search (tonight's availability)
         const camps = await lodging.search(String(event._id));
         const freeCamp = camps.find((c) => !c.pricePerNight && c.availableBeds >= 2);
-        const b = await lodging.book(freeCamp._id, user, { beds: 2, guestNames: ['A', 'B'] });
+        const b = await lodging.book(freeCamp._id, user, { beds: 2, guestNames: ['Asha Patil', 'Ravi Patil'] });
         check('Free camp booking has tent and bed numbers', /Bed/.test(b.pass.details.location || ''), b.pass.details.location);
         const assigned = await BedAssignment.countDocuments({ bookingId: b.booking._id });
         check('Two BedAssignment rows created', assigned === 2);
@@ -92,7 +93,7 @@ async function main() {
 
         // The limit is 5 beds: booking exactly 5 must work (the model once allowed only 4)
         const bigCamp = camps.find((c) => !c.pricePerNight && c.availableBeds >= 5);
-        const five = await lodging.book(bigCamp._id, user, { beds: 5, guestNames: ['A', 'B', 'C', 'D', 'E'] });
+        const five = await lodging.book(bigCamp._id, user, { beds: 5, guestNames: ['Asha Patil', 'Ravi Patil', 'Meena Patil', 'Om Patil', 'Gita Patil'] });
         check('Booking 5 beds (the limit) works', five.booking.beds === 5 && five.pass.details.bedNumbers.length === 5, five.pass.details.location);
         await expectError('A 6th bed on the same night is refused', () => lodging.book(bigCamp._id, user, { beds: 1 }), 400, /limit/i);
 
@@ -146,7 +147,7 @@ async function main() {
         // ---- 4. Order + simulated payment ----
         const bus = await TransitRoute.findOne({ eventId: event._id, fare: { $gt: 0 } }).lean();
         const order = await orders.create(user, [
-            { kind: 'LODGING', refId: String(paidCamp._id), input: { beds: 2, guestNames: ['A', 'B'] } },
+            { kind: 'LODGING', refId: String(paidCamp._id), input: { beds: 2, guestNames: ['Asha Patil', 'Ravi Patil'] } },
             { kind: 'TRANSIT', refId: String(bus._id) },
         ]);
         check('Order priced on the server', order.total === paidCamp.pricePerNight * 2 + bus.fare, `total ₹${order.total}`);
@@ -465,6 +466,7 @@ async function main() {
         }
 
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
+        finished = true;
     } finally {
         await OtpCode.deleteMany({ phone: PHONE });
         if (savedLanes) {
@@ -493,8 +495,9 @@ async function main() {
             await Event.deleteOne({ _id: hostedId });
         }
         await mongoose.disconnect();
-        console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed. Test data cleaned up.');
-        process.exitCode = failed ? 1 : 0;
+        if (!finished) console.log('\nStopped early: a step threw an error (shown below). Test data cleaned up.');
+        else console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed. Test data cleaned up.');
+        process.exitCode = failed || !finished ? 1 : 0;
     }
 }
 
