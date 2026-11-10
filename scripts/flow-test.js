@@ -255,11 +255,26 @@ async function main() {
         check('Admins and hosts cannot book (they use their own dashboards)', ['SUPER_ADMIN', 'AUTHORITY', 'CORPORATE_ADMIN', 'NGO_ADMIN', 'VOLUNTEER'].every((r) => !hasPermission(r, 'booking:create')) && hasPermission('USER', 'booking:create'));
 
         // ---- 8. One personal QR ----
+        // Profile picture: checked, stored, replaced, shown to gate staff, removed
+        const avatar = require('../modules/auth/avatar');
+        // smallest valid JPEG header bytes (the server checks the real file type, not the name)
+        const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 1), Buffer.from([0xff, 0xd9])]);
+        await expectError('A file that is not an image is refused as a profile photo', () => avatar.setPhoto(user, Buffer.from('this is not a picture at all, just text')), 400, /JPEG, PNG or WEBP/);
+        await expectError('A profile photo over 1 MB is refused', () => avatar.setPhoto(user, Buffer.concat([jpeg, Buffer.alloc(avatar.MAX_BYTES)])), 400, /too large/);
+        const p1 = await avatar.setPhoto(user, jpeg);
+        const key1 = p1.photoUrl.split('/').pop();
+        check('A profile photo is saved and has a private link', /^\/api\/auth\/photo\/[a-f0-9]{32}$/.test(p1.photoUrl) && !!(await avatar.find(key1)));
+        const p2 = await avatar.setPhoto(user, jpeg);
+        check('A new photo replaces the old one (old link stops working)', p2.photoUrl !== p1.photoUrl && !(await avatar.find(key1)) && (await avatar.Avatar.countDocuments({ userId: me._id })) === 1);
+        check('The account shows the photo link', (await User.findById(me._id)).toPublic().photoUrl === p2.photoUrl);
         const { qr } = await passes.myQr(user);
         const staff = await User.findOne({ phone: '9000000002' }).lean(); // authority can scan everywhere
         const scanner = { ...staff, id: String(staff._id) };
         const r1 = await passes.scan(qr, scanner, { service: 'TRANSIT' });
         check('Personal QR at the bus gate redeems the bus pass', r1.result === 'VALID' && r1.pass?.type === 'TRANSIT', r1.message);
+        check('Gate staff see the pilgrim\'s photo when they scan', r1.holder?.photoUrl === p2.photoUrl);
+        await avatar.removePhoto(user);
+        check('Removing the photo deletes it', !(await User.findById(me._id).lean()).photoKey && !(await avatar.Avatar.countDocuments({ userId: me._id })));
         const r2 = await passes.scan(qr, scanner, { service: 'TRANSIT' });
         check('Scanning again at the bus gate finds nothing left', r2.result === 'REJECTED', r2.message);
         await passes.myQr(user, { reset: true });
@@ -502,6 +517,7 @@ async function main() {
             const mealPasses = await Pass.find({ userId: me._id, type: 'MEAL' }).lean();
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
             await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id }), require('../modules/lostfound/photo.model').Photo.deleteMany({ uploadedBy: me._id })]);
+            await require('../modules/auth/avatar').Avatar.deleteMany({ userId: me._id });
             await User.deleteOne({ _id: me._id });
         }
         for (const id of groupIds) {

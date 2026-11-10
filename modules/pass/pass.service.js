@@ -39,11 +39,13 @@ const summary = (pass) => ({
     title: pass.title,
     subtitle: pass.subtitle,
     details: pass.details,
-    holder: pass.userId && pass.userId.name ? { name: pass.userId.name, phone: maskPhone(pass.userId.phone) } : undefined,
+    holder: pass.userId && pass.userId.name ? { name: pass.userId.name, phone: maskPhone(pass.userId.phone), photoUrl: photoUrlFor(pass.userId.photoKey) } : undefined,
     validFrom: pass.validFrom,
     validUntil: pass.validUntil,
     redeemedAt: pass.redeemedAt,
 });
+
+const { photoUrlFor } = require('../auth/avatar');
 
 const maskPhone = (phone) => (phone ? `${'*'.repeat(6)}${String(phone).slice(-4)}` : undefined);
 
@@ -74,7 +76,7 @@ const scanPass = async (qr, scanner, opts = {}) => {
     const decoded = passToken.decode(qr);
     if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
 
-    const pass = await Pass.findById(decoded.passId).populate('userId', 'name countryCode phone').lean();
+    const pass = await Pass.findById(decoded.passId).populate('userId', 'name countryCode phone photoKey').lean();
     if (!pass || pass.nonce !== decoded.nonce) {
         return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'Pass not found' };
     }
@@ -104,7 +106,7 @@ const redeem = async (pass, scanner) => {
         { $set: { status: 'REDEEMED', redeemedAt: now, redeemedBy: scanner._id } },
         { returnDocument: 'after' }
     )
-        .populate('userId', 'name countryCode phone')
+        .populate('userId', 'name countryCode phone photoKey')
         .lean();
 
     if (!redeemed) {
@@ -150,7 +152,7 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     if (passToken.isLiveQr(qr)) {
         const parsed = passToken.parseLive(qr);
         if (!parsed) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
-        holder = await User.findById(parsed.userId).select('name countryCode phone isActive +qrNonce').lean();
+        holder = await User.findById(parsed.userId).select('name countryCode phone photoKey isActive +qrNonce').lean();
         if (!holder || !holder.isActive || !holder.qrNonce) return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR is no longer valid. Ask for the new one.' };
         const check = passToken.checkLive(parsed, holder.qrNonce);
         if (check === 'FAKE') return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code (or the QR was reset)' };
@@ -158,14 +160,14 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     } else {
         const decoded = passToken.decodeUser(qr);
         if (!decoded) return { result: 'REJECTED', reason: 'FAKE', message: 'Invalid or tampered QR code' };
-        holder = await User.findById(decoded.userId).select('name countryCode phone isActive +qrNonce').lean();
+        holder = await User.findById(decoded.userId).select('name countryCode phone photoKey isActive +qrNonce').lean();
         if (!holder || !holder.isActive || holder.qrNonce !== decoded.nonce) {
             return { result: 'REJECTED', reason: 'REVOKED', message: 'This personal QR was reset or is no longer valid. Ask for the new one.' };
         }
         if (!staticAllowed()) return { result: 'REJECTED', reason: 'STATIC_QR', message: 'Only the live (moving) QR is accepted. Ask them to open My Passbook in the app.' };
         isStatic = true;
     }
-    const person = { name: holder.name, phone: maskPhone(holder.phone) };
+    const person = { name: holder.name, phone: maskPhone(holder.phone), photoUrl: photoUrlFor(holder.photoKey) };
 
     const now = new Date();
     const filter = { userId: holder._id, status: 'ACTIVE', validFrom: { $lte: now }, validUntil: { $gte: now } };
@@ -176,7 +178,7 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     if (scanner.role === ROLES.NGO_ADMIN) {
         filter.$or = [{ providerId: scanner.providerId || null }, { providerId: null }, { providerId: { $exists: false } }];
     }
-    let candidates = await Pass.find(filter).sort({ validUntil: 1 }).populate('userId', 'name countryCode phone').lean();
+    let candidates = await Pass.find(filter).sort({ validUntil: 1 }).populate('userId', 'name countryCode phone photoKey').lean();
 
     if (passId) {
         candidates = candidates.filter((p) => String(p._id) === String(passId));
@@ -191,7 +193,7 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     const done = await redeem(candidates[0], scanner);
     // a static QR could be someone else's screenshot: ask for ID before letting them in
     if (isStatic && done.result === 'VALID') done.message = `${done.message} - static QR: check their ID`;
-    return { ...done, personal: true, staticQr: isStatic };
+    return { ...done, holder: person, personal: true, staticQr: isStatic };
 };
 
 const TYPE_WORD = { LODGING: 'stay', MEAL: 'meal token', TRANSIT: 'bus pass', PUBLIC: 'event ticket', CORPORATE: 'event badge', VOLUNTEER: 'volunteer ID' };

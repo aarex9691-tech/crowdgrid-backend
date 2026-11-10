@@ -1,6 +1,8 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const multer = require('multer');
 const auth = require('./auth.service');
+const avatar = require('./avatar');
 const { requireAuth, requirePermission } = require('../../middleware/auth');
 
 const router = express.Router();
@@ -37,6 +39,34 @@ router.get('/me', requireAuth, async (req, res) => {
 // Edit profile (email, date of birth, gender, city, emergency contact)
 router.patch('/me', requireAuth, async (req, res) => {
     res.json(await auth.updateProfile(req.user, req.body || {}));
+});
+
+// Profile picture: shrunk in the browser, checked here, kept in MongoDB
+const photoUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: avatar.MAX_BYTES, files: 1 },
+});
+const onePhoto = (req, res, next) =>
+    photoUpload.single('photo')(req, res, (err) => {
+        if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ message: 'The photo is too large. Use one under 1 MB.' });
+        if (err) return res.status(400).json({ message: 'Could not read that photo. Try another one.' });
+        return next();
+    });
+
+router.put('/me/photo', requireAuth, onePhoto, async (req, res) => {
+    res.json(await avatar.setPhoto(req.user, req.file?.buffer));
+});
+
+router.delete('/me/photo', requireAuth, async (req, res) => {
+    res.json(await avatar.removePhoto(req.user));
+});
+
+router.get('/photo/:key', async (req, res) => {
+    const photo = await avatar.find(req.params.key);
+    if (!photo) return res.status(404).json({ message: 'Photo not found' });
+    // private: browsers may keep it, shared caches may not; the key changes when the picture does
+    res.set({ 'Content-Type': photo.contentType, 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+    res.send(Buffer.from(photo.data));
 });
 
 router.post('/logout-all', requireAuth, async (req, res) => {

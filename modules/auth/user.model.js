@@ -34,6 +34,7 @@ const userSchema = new mongoose.Schema(
         lockUntil: { type: Date },
         // Bumped by "log out of all devices": tokens carrying an older version stop working
         tokenVersion: Number, // only stored after "log out of all devices"
+        photoKey: String, // profile picture (see avatar.js); random, changes with every new picture
         // Personal "one QR for everything" (see utils/passToken.js); reset to revoke old copies
         qrNonce: { type: String, select: false },
     },
@@ -56,6 +57,7 @@ userSchema.methods.toPublic = function toPublic() {
         gender: this.gender,
         city: this.city,
         emergencyContact: this.emergencyContact?.phone ? this.emergencyContact : undefined,
+        photoUrl: this.photoKey ? `/api/auth/photo/${this.photoKey}` : undefined,
     };
 };
 
