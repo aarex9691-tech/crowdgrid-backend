@@ -34,7 +34,7 @@ const DETOUR = 1.1; // lanes bend: 10% longer than the straight line
 // many pilgrims were just sent down costs more, so later pilgrims are spread over other
 // lanes instead of everyone being sent down the same "safest" route.
 //   safest cost = length x crowd factor x (1 + recent plans on the lane / LANE_PLAN_CAPACITY)
-const LOAD_WINDOW_MIN = 15;
+const { LOAD_WINDOW_MIN } = require('./routePlan.model');
 const LANE_PLAN_CAPACITY = Number(process.env.ROUTE_LANE_CAPACITY) || 40; // plans per lane per window before its cost doubles
 
 // ---------- The graph (built once; it never changes while the server runs) ----------
@@ -171,29 +171,52 @@ const planOn = (conditions, from, to, { load = new Map() } = {}) => {
     };
 };
 
-// ---------- Recent plans (in memory: one server instance on Render) ----------
-const recentPlans = new Map(); // laneId -> [timestamps]
+// ---------- Recent plans (shared in MongoDB; in memory only when there is no database, e.g. unit tests) ----------
+const { RoutePlan } = require('./routePlan.model');
+const memoryPlans = []; // { laneIds, at } fallback
+const useDb = () => mongoose.connection.readyState === 1;
 
 /** How many routes were planned along each lane in the last LOAD_WINDOW_MIN minutes. */
-const laneLoad = (now = Date.now()) => {
-    const since = now - LOAD_WINDOW_MIN * 60000;
+const laneLoad = async (now = Date.now()) => {
+    const since = new Date(now - LOAD_WINDOW_MIN * 60000);
     const out = new Map();
-    for (const [laneId, times] of recentPlans) {
-        while (times.length && times[0] < since) times.shift();
-        if (times.length) out.set(laneId, times.length);
-        else recentPlans.delete(laneId);
+    if (useDb()) {
+        try {
+            const rows = await RoutePlan.aggregate([
+                { $match: { at: { $gte: since } } },
+                { $unwind: '$laneIds' },
+                { $group: { _id: '$laneIds', n: { $sum: 1 } } },
+            ]);
+            for (const r of rows) out.set(r._id, r.n);
+        } catch (e) {
+            console.warn(`[route] lane load unavailable: ${e.message}`); // plan without load rather than fail
+        }
+        return out;
     }
+    while (memoryPlans.length && memoryPlans[0].at < since) memoryPlans.shift();
+    for (const p of memoryPlans) for (const id of p.laneIds) out.set(id, (out.get(id) || 0) + 1);
     return out;
 };
 
 /** Remember that a pilgrim was just sent along these lanes. */
-const recordPlan = (laneIdsUsed, now = Date.now()) => {
-    for (const id of laneIdsUsed) {
-        if (!recentPlans.has(id)) recentPlans.set(id, []);
-        recentPlans.get(id).push(now);
+const recordPlan = async (laneIdsUsed, now = Date.now()) => {
+    if (!laneIdsUsed?.length) return;
+    const entry = { laneIds: [...laneIdsUsed], at: new Date(now) };
+    if (useDb()) {
+        try {
+            await RoutePlan.create(entry);
+        } catch (e) {
+            console.warn(`[route] could not record plan: ${e.message}`); // the route is still returned
+        }
+        return;
     }
+    memoryPlans.push(entry);
+    memoryPlans.sort((x, y) => x.at - y.at);
 };
-const resetLoad = () => recentPlans.clear();
+const resetLoad = async () => {
+    memoryPlans.length = 0;
+    if (useDb()) await RoutePlan.deleteMany({});
+};
 
 const nearestNode = (p) => {
     let best = null;
@@ -241,7 +264,7 @@ const loadConditions = async (event) => {
 const network = async ({ eventId } = {}) => {
     const event = await routeEvent(eventId);
     const conditions = await loadConditions(event);
-    const load = laneLoad();
+    const load = await laneLoad();
     return {
         event,
         nodes: NODES.map(({ places, ...n }) => n),
@@ -271,8 +294,8 @@ const plan = async ({ eventId, from, to, lat, lng } = {}) => {
     if (start.id === dest.id) throw badRequest('You are already at this ghat');
 
     const conditions = await loadConditions(event);
-    const result = planOn(conditions, start.id, dest.id, { load: laneLoad() });
-    if (result.safest) recordPlan(result.safest.lanes.map((l) => l.id)); // this pilgrim will walk it
+    const result = planOn(conditions, start.id, dest.id, { load: await laneLoad() });
+    if (result.safest) await recordPlan(result.safest.lanes.map((l) => l.id)); // this pilgrim will walk it
     return { from: { id: start.id, name: start.name, snappedM }, to: { id: dest.id, name: dest.name }, ...result, generatedAt: new Date() };
 };
 

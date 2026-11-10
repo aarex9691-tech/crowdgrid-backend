@@ -324,7 +324,16 @@ async function main() {
         await LaneStatus.insertMany(SEED_STATUS.map((l) => ({ ...l, eventId: flagship._id })));
         const net = await route.network({});
         check('Route network loads with the demo lane statuses', net.nodes.length > 20 && net.lanes.find((l) => l.id === 'procession-route')?.manualStatus === 'CROWDED');
+        const { RoutePlan } = require('../modules/route/routePlan.model');
+        const plansBefore = await RoutePlan.countDocuments();
         const plan1 = await route.plan({ from: 'tent-city-a', to: 'ramkund' });
+        const savedPlan = await RoutePlan.findOne().sort({ at: -1 }).lean();
+        check('Each planned route is shared in MongoDB (not kept in one server\'s memory)', (await RoutePlan.countDocuments()) === plansBefore + 1 && savedPlan.laneIds.join() === plan1.safest.lanes.map((l) => l.id).join());
+        await RoutePlan.init(); // waits until MongoDB has built the TTL index
+        const ttl = (await RoutePlan.collection.indexes()).find((i) => i.expireAfterSeconds !== undefined);
+        check('Old route plans delete themselves after 15 minutes', ttl?.expireAfterSeconds === 15 * 60);
+        const netAfter = await route.network({});
+        check('The map shows how many people were just sent along each lane', plan1.safest.lanes.every((l) => (netAfter.lanes.find((x) => x.id === l.id)?.recentPlans || 0) >= 1));
         check('Safest route avoids the crowded procession route', plan1.reachable && !plan1.safest.lanes.some((l) => l.id === 'procession-route') && plan1.algorithms.sameCost, `${plan1.safest.distanceM} m, ${plan1.safest.minutes} min; A* ${plan1.algorithms.astar.visited} vs Dijkstra ${plan1.algorithms.dijkstra.visited} junctions`);
         const controlRoom = await User.findOne({ phone: '9000000002' }).lean();
         await route.setLane(controlRoom, 'ashram-sardar', { status: 'CLOSED', note: 'Flow test' });

@@ -422,15 +422,15 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.ok(routes.size > 1, 'everyone was sent the same way');
         console.log(`      (120 plans used ${routes.size} different routes)`);
     });
-    await check('Recent plans are forgotten after 15 minutes', () => {
-        rs.resetLoad();
+    await check('Recent plans are forgotten after 15 minutes', async () => {
+        await rs.resetLoad();
         const now = Date.now();
-        rs.recordPlan(['a', 'b'], now - 20 * 60000);
-        rs.recordPlan(['a'], now);
-        const l = rs.laneLoad(now);
+        await rs.recordPlan(['a', 'b'], now - 20 * 60000);
+        await rs.recordPlan(['a'], now);
+        const l = await rs.laneLoad(now);
         assert.equal(l.get('a'), 1);
         assert.ok(!l.has('b'));
-        rs.resetLoad();
+        await rs.resetLoad();
     });
 
     await check('Live personal QR: right now OK, a 90-second-old screenshot or an old key refused', () => {
