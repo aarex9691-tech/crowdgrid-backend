@@ -224,6 +224,16 @@ async function main() {
         const foreignContact = await events.create({ ...base, title: 'Flow test foreign contact', ticketPrice: 99, contactCountryCode: '44', contactPhone: '7700 900123' }, host);
         check('Contact number with a country code is saved as digits', foreignContact.contactCountryCode === '44' && foreignContact.contactPhone === '7700900123');
         await Event.deleteOne({ _id: foreignContact._id });
+        // Public event categories: the full list is offered, older ones are no longer accepted for new events
+        const music = await events.create({ ...base, title: 'Flow test concert', category: 'music', ticketPrice: 99 }, host);
+        check('A host can list a Music & concerts event', music.category === 'MUSIC');
+        await Event.deleteOne({ _id: music._id });
+        await expectError('An unknown category is refused', () => events.create({ ...base, ticketPrice: 99, category: 'PARTY' }, host), 400, /category/i);
+        await expectError('The old "Cultural" category is not offered for new events', () => events.create({ ...base, ticketPrice: 99, category: 'CULTURAL' }, host), 400, /category/i);
+        const { EVENT_CATEGORIES } = require('../utils/eventCategories');
+        const seededCats = await Event.distinct('category', { kind: 'PUBLIC', status: 'ACTIVE' });
+        const missingCats = EVENT_CATEGORIES.filter((c) => c !== 'OTHER' && !seededCats.includes(c));
+        check('Every event category has at least one public event on', !missingCats.length, missingCats.length ? `missing: ${missingCats.join(', ')}` : `${seededCats.length} categories`);
         await expectError('A name with digits is refused at sign-up', () => auth.register({ name: 'Ram3sh', phone: '6999999991', countryCode: '91', password: 'Test@1234' }), 400, /name/i);
         await expectError('Your own number as emergency contact is refused', () => auth.updateProfile(user, { emergencyContact: { name: 'Me', countryCode: '91', phone: PHONE } }), 400);
         const freeEv = await events.create({ ...base, title: 'Flow test free darshan', ticketPrice: 0 }, host);

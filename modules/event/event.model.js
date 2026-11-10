@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { ALL_EVENT_CATEGORIES } = require('../../utils/eventCategories');
 
 /**
  * One collection for the three event families shown in the app:
@@ -37,7 +38,7 @@ const eventSchema = new mongoose.Schema(
         tips: { type: [{ type: String, maxlength: 200 }], default: undefined }, // practical advice shown on the yatra page
 
         // PUBLIC: paid events (headcount is updated atomically when tickets are issued)
-        category: { type: String, enum: ['SPIRITUAL', 'CULTURAL', 'HERITAGE_WALK', 'SEVA', 'WORKSHOP', 'OTHER'] },
+        category: { type: String, enum: ALL_EVENT_CATEGORIES },
         address: { type: String, maxlength: 200 }, // street / landmark, typed or from Google Maps
         pincode: { type: String, match: [/^\d{6}$/, 'Pincode must be 6 digits'] },
         location: { _id: false, lat: { type: Number, min: -90, max: 90 }, lng: { type: Number, min: -180, max: 180 } },

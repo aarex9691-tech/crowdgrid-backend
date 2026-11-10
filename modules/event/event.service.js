@@ -112,7 +112,7 @@ const assertHostedWindow = (startDate, endDate) => {
 
 const DESC_MIN = 150;
 const DESC_MAX = 200;
-const PUBLIC_CATEGORIES = ['SPIRITUAL', 'CULTURAL', 'HERITAGE_WALK', 'SEVA', 'WORKSHOP', 'OTHER'];
+const { EVENT_CATEGORIES: PUBLIC_CATEGORIES } = require('../../utils/eventCategories');
 
 /** Checks a paid public event before it is saved; returns the cleaned data. */
 const validatePublic = (data, user) => {
@@ -130,7 +130,7 @@ const validatePublic = (data, user) => {
     if (letters < DESC_MIN) throw badRequest(`Description needs at least ${DESC_MIN} characters (not counting spaces); it has ${letters}`);
     if (letters > DESC_MAX) throw badRequest(`Description can have at most ${DESC_MAX} characters (not counting spaces); it has ${letters}`);
     data.category = String(data.category || '').toUpperCase();
-    if (!PUBLIC_CATEGORIES.includes(data.category)) throw badRequest(`Category must be one of ${PUBLIC_CATEGORIES.join(', ')}`);
+    if (!PUBLIC_CATEGORIES.includes(data.category)) throw badRequest('Choose a category from the list');
     data.pincode = v.pincode(data.pincode);
     // ₹0 = free entry: registration is confirmed straight away, no payment step
     data.ticketPrice = v.int(data.ticketPrice ?? 0, 'Ticket price (₹)', { min: 0, max: 100000, required: true });
