@@ -446,6 +446,17 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.ok(t.isUserQr(qr) && t.isLiveQr(qr) && !t.isLiveQr(t.encodeUser(uid, 'n1')));
     });
 
+    await check('Health check: connected and answering is ok; down or silent database is reported', async () => {
+        const h = require('../utils/health');
+        const fake = (readyState, ping) => ({ readyState, db: { admin: () => ({ command: ping }) } });
+        const up = await h.check(fake(1, async () => ({ ok: 1 })));
+        assert.ok(up.ok && up.body.status === 'ok' && typeof up.body.database.pingMs === 'number');
+        const down = await h.check(fake(0));
+        assert.ok(!down.ok && down.body.database.state === 'disconnected');
+        const broken = await h.check(fake(1, async () => { throw new Error('connection reset'); }));
+        assert.ok(!broken.ok && broken.body.database.state === 'not answering' && /reset/.test(broken.body.database.error));
+    });
+
     console.log(`\n${passed} passed, ${failed} failed (today in IST: ${istDate()})`);
     process.exit(failed ? 1 : 0);
 })().catch((err) => {

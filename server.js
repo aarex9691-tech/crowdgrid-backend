@@ -69,7 +69,8 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+// /health (always 200, shows the database state) and /health/ready (503 when the database is down)
+require('./utils/health').mount(app, require('mongoose'));
 // Old photos saved on disk before they moved into MongoDB (new ones: /api/lost-found/photos/:id)
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
