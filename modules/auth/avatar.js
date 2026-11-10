@@ -37,7 +37,7 @@ const setPhoto = async (user, buffer) => {
 
     const key = crypto.randomBytes(16).toString('hex');
     await Avatar.create({ key, userId: user._id, data: buffer, contentType, size: buffer.length });
-    const before = await User.findByIdAndUpdate(user._id, { $set: { photoKey: key } }, { new: false }).select('photoKey').lean();
+    const before = await User.findByIdAndUpdate(user._id, { $set: { photoKey: key } }, { returnDocument: 'before' }).select('photoKey').lean();
     // Old pictures of this user are removed; the link of the previous one stops working at once
     await Avatar.deleteMany({ userId: user._id, key: { $ne: key } });
     if (!before) {
