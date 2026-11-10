@@ -69,6 +69,12 @@ router.get('/photo/:key', async (req, res) => {
     res.send(Buffer.from(photo.data));
 });
 
+// Set a new password (required after a help desk reset); logs out other devices
+router.post('/password', requireAuth, authLimiter, async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    res.json(await auth.changePassword(req.user, { currentPassword, newPassword }));
+});
+
 router.post('/logout-all', requireAuth, async (req, res) => {
     res.json(await auth.logoutAll(req.user));
 });

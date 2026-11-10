@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../modules/auth/user.model');
 const { hasPermission } = require('../config/roles');
-const { unauthorized, forbidden } = require('../utils/httpError');
+const { HttpError, unauthorized, forbidden } = require('../utils/httpError');
 
 const readToken = (req) => {
     const header = req.headers.authorization || '';
@@ -32,13 +32,24 @@ const loadUser = async (token) => {
         phone: user.phone,
         role: user.role,
         providerId: user.providerId || null,
+        mustChangePassword: !!user.mustChangePassword,
     };
+};
+
+// While an account still has a temporary password from the help desk, only these work
+const ALLOWED_BEFORE_NEW_PASSWORD = [/\/auth\/me$/, /\/auth\/password$/];
+const passwordGate = (req) => {
+    if (!req.user?.mustChangePassword) return;
+    const path = (req.originalUrl || '').split('?')[0];
+    if (ALLOWED_BEFORE_NEW_PASSWORD.some((re) => re.test(path))) return;
+    throw new HttpError(403, 'Set a new password first. You are using a temporary password from the help desk.', { code: 'PASSWORD_CHANGE_REQUIRED' });
 };
 
 const requireAuth = async (req, res, next) => {
     const token = readToken(req);
     if (!token) throw unauthorized('Please log in to continue');
     req.user = await loadUser(token);
+    passwordGate(req);
     next();
 };
 

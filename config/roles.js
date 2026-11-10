@@ -24,6 +24,8 @@ const PERMISSIONS = Object.freeze({
     'platform:manage': [SUPER_ADMIN],
     'platform:audit': [SUPER_ADMIN, AUTHORITY],
     'staff:create': [SUPER_ADMIN],
+    // Help desk: look up an account by mobile number and give a temporary password
+    'account:reset': [SUPER_ADMIN, AUTHORITY],
 
     // Verify NGOs & service camps
     'provider:verify': [SUPER_ADMIN, AUTHORITY],

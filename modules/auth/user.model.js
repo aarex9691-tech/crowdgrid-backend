@@ -32,6 +32,7 @@ const userSchema = new mongoose.Schema(
         // Account lockout after repeated wrong passwords
         failedLogins: Number, // only stored after a wrong password
         lockUntil: { type: Date },
+        mustChangePassword: Boolean, // set by a help desk reset; only stored while true
         // Bumped by "log out of all devices": tokens carrying an older version stop working
         tokenVersion: Number, // only stored after "log out of all devices"
         photoKey: String, // profile picture (see avatar.js); random, changes with every new picture
@@ -58,6 +59,7 @@ userSchema.methods.toPublic = function toPublic() {
         city: this.city,
         emergencyContact: this.emergencyContact?.phone ? this.emergencyContact : undefined,
         photoUrl: this.photoKey ? `/api/auth/photo/${this.photoKey}` : undefined,
+        mustChangePassword: this.mustChangePassword || undefined,
     };
 };
 

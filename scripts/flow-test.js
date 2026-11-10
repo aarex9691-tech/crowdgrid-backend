@@ -502,6 +502,38 @@ async function main() {
         }
 
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
+
+        // ---- Help desk password reset (last: it changes the test pilgrim's password) ----
+        const helpdesk = require('../modules/auth/helpdesk');
+        const { requireAuth } = require('../middleware/auth');
+        const deskUser = await User.findOne({ phone: '9000000002' }).lean();
+        const deskStaff = { ...deskUser, id: String(deskUser._id) };
+        const found = await helpdesk.lookup(deskStaff, { countryCode: '91', phone: PHONE });
+        check('Help desk finds the account by mobile number (number partly hidden)', String(found._id) === String(me._id) && found.canReset && /\*{6}\d{4}$/.test(found.phone));
+        const volunteerUser = await User.findOne({ phone: '9000000005' }).lean();
+        await expectError('Authority cannot reset a staff account at the help desk', () => helpdesk.reset(deskStaff, volunteerUser._id), 403, /pilgrim/);
+        await expectError('Staff cannot reset their own password at the help desk', () => helpdesk.reset(deskStaff, deskUser._id), 403);
+        check('Only Authority and Super Admin can reset passwords', hasPermission('AUTHORITY', 'account:reset') && hasPermission('SUPER_ADMIN', 'account:reset') && !hasPermission('USER', 'account:reset') && !hasPermission('VOLUNTEER', 'account:reset'));
+        const tokenBefore = (await auth.login({ identifier: PHONE, password: 'Crowd@123' })).token;
+        const given = await helpdesk.reset(deskStaff, me._id);
+        check('Help desk gives a readable temporary password', /^[A-HJ-NP-Z]{4}-[2-9]{4}$/.test(given.tempPassword), given.tempPassword);
+        await expectError('The old password stops working after a reset', () => auth.login({ identifier: PHONE, password: 'Crowd@123' }), 401);
+        const runGate = async (token, url) => {
+            const req = { headers: { authorization: `Bearer ${token}` }, originalUrl: url };
+            await requireAuth(req, {}, () => {});
+            return req.user;
+        };
+        await expectError('Old sessions are logged out by the reset', () => runGate(tokenBefore, '/api/auth/me'), 401);
+        const tempLogin = await auth.login({ identifier: PHONE, password: given.tempPassword });
+        check('Temporary password logs in and asks for a new password', !!tempLogin.token && tempLogin.user.mustChangePassword === true);
+        await expectError('Until a new password is set, other pages are blocked', () => runGate(tempLogin.token, '/api/passes/mine'), 403, /new password/);
+        check('Setting the new password is allowed with the temporary one', !!(await runGate(tempLogin.token, '/api/auth/password')));
+        await expectError('A wrong temporary password is refused when setting a new one', () => auth.changePassword(user, { currentPassword: 'WRONG-0000', newPassword: 'NewPass456' }), 400, /temporary password/);
+        await expectError('The temporary password cannot be kept as the new one', () => auth.changePassword(user, { currentPassword: given.tempPassword, newPassword: given.tempPassword }), 400);
+        const changed = await auth.changePassword(user, { currentPassword: given.tempPassword, newPassword: 'NewPass456' });
+        check('New password saved; the account is unlocked from the gate', !!changed.token && !changed.user.mustChangePassword && !!(await runGate(changed.token, '/api/passes/mine')));
+        check('The new password logs in', !!(await auth.login({ identifier: PHONE, password: 'NewPass456' })).token);
+        check('The reset is in the audit log', !!(await require('../modules/audit/audit.model').findOne({ action: 'PASSWORD_RESET_BY_STAFF', targetId: me._id }).lean()));
         finished = true;
     } finally {
         await OtpCode.deleteMany({ phone: PHONE });

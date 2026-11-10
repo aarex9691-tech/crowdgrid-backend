@@ -233,4 +233,24 @@ const updateProfile = async (user, body = {}) => {
     return updated.toPublic();
 };
 
-module.exports = { requestOtp, register, login, me, createStaff, logoutAll, updateProfile, ageOn, MIN_AGE, SALT_ROUNDS };
+/**
+ * The account holder sets a new password (needed after a help desk reset, also usable any time).
+ * Every other device is logged out; this device gets a fresh token.
+ */
+const changePassword = async (actor, { currentPassword, newPassword }) => {
+    const user = await User.findById(actor._id).select('+passwordHash');
+    if (!user) throw notFound('User not found');
+    if (!currentPassword || !(await bcrypt.compare(String(currentPassword), user.passwordHash))) {
+        throw badRequest(user.mustChangePassword ? 'The temporary password is not right. Type it exactly as the help desk gave it.' : 'Your current password is not right');
+    }
+    validatePassword(newPassword);
+    if (await bcrypt.compare(String(newPassword), user.passwordHash)) throw badRequest('Choose a new password, not the one you have now');
+    user.passwordHash = await bcrypt.hash(String(newPassword), SALT_ROUNDS);
+    user.mustChangePassword = undefined;
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    await user.save();
+    audit.record({ actor: user, action: 'PASSWORD_CHANGED', targetType: 'User', targetId: user._id, summary: `${user.name} set a new password` });
+    return { message: 'Password changed. Other devices have been logged out.', token: signToken(user), user: user.toPublic() };
+};
+
+module.exports = { requestOtp, register, login, me, createStaff, logoutAll, updateProfile, changePassword, ageOn, MIN_AGE, SALT_ROUNDS, phoneQuery, cleanPhoneOrThrow };
