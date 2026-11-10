@@ -44,7 +44,8 @@ async function main() {
     await require('../utils/dns').connectMongo(mongoose, require('./test-db').testDbUri());
     await detectTransactionSupport();
     const PHONE = '6999999990';
-    await User.deleteMany({ phone: PHONE });
+    const PHONE_NO_CODE = '6999999991';
+    await User.deleteMany({ phone: { $in: [PHONE, PHONE_NO_CODE] } });
     const { OtpCode } = require('../modules/auth/otp');
     await OtpCode.deleteMany({ phone: PHONE });
     let me;
@@ -57,7 +58,15 @@ async function main() {
         // ---- 1. Phone numbers ----
         await expectError('Register rejects a 12-digit Indian number', () => auth.register({ name: 'Test Pilgrim', phone: '900000000612', password: 'Crowd@123' }), 400, /mobile number/i);
         await expectError('Register rejects a 5-digit number', () => auth.register({ name: 'Test Pilgrim', phone: '90000', password: 'Crowd@123' }), 400, /mobile number/i);
-        // Sign-up needs the one-time code sent to the number (simulated SMS returns it)
+        // By default sign-up needs no code (the screen has no code step)
+        const savedOtpSetting = process.env.OTP_REQUIRED;
+        delete process.env.OTP_REQUIRED;
+        const plain = await auth.register({ name: 'Flow Test Pilgrim Two', phone: PHONE_NO_CODE, countryCode: '91', password: 'Crowd@123' });
+        check('Sign-up works without a code (OTP is off by default)', !!plain.token && plain.user.role === 'USER');
+        await User.deleteOne({ phone: PHONE_NO_CODE });
+
+        // With OTP_REQUIRED=true, sign-up needs the one-time code sent to the number (simulated SMS returns it)
+        process.env.OTP_REQUIRED = 'true';
         await expectError('Sign-up without the SMS code is refused', () => auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123' }), 400, /6-digit code/);
         const sent = await auth.requestOtp({ phone: PHONE, countryCode: '91' });
         check('A 6-digit code is issued for sign-up (simulated SMS)', /^\d{6}$/.test(sent.devCode || ''));
@@ -65,6 +74,8 @@ async function main() {
         await expectError('A wrong code is refused', () => auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123', otp: wrong }), 400, /not right/);
         const reg = await auth.register({ name: 'Flow Test Pilgrim', phone: PHONE, countryCode: '91', password: 'Crowd@123', otp: sent.devCode });
         check('The code works once only', (await OtpCode.countDocuments({ phone: PHONE, usedAt: { $ne: null } })) === 1);
+        if (savedOtpSetting === undefined) delete process.env.OTP_REQUIRED;
+        else process.env.OTP_REQUIRED = savedOtpSetting;
         me = await User.findById(reg.user._id).lean();
         check('Register with +91 works', !!me && me.countryCode === '91');
         const l1 = await auth.login({ identifier: PHONE, password: 'Crowd@123' });
@@ -469,6 +480,7 @@ async function main() {
         finished = true;
     } finally {
         await OtpCode.deleteMany({ phone: PHONE });
+        await User.deleteMany({ phone: PHONE_NO_CODE });
         if (savedLanes) {
             const { LaneStatus } = require('../modules/route/lane.model');
             await LaneStatus.deleteMany({ eventId: savedLanes.eventId });

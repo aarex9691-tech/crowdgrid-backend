@@ -47,7 +47,9 @@ const providers = {
     },
 };
 const provider = () => providers[process.env.OTP_PROVIDER || 'SIMULATED'] || providers.SIMULATED;
-const required = () => process.env.OTP_REQUIRED !== 'false';
+// Off by default: the sign-up screen has no code step. Set OTP_REQUIRED=true (with a code step on the
+// sign-up screen and a real OTP_PROVIDER) to make every new account verify its mobile number.
+const required = () => process.env.OTP_REQUIRED === 'true';
 
 /** Creates and "sends" a code for this number. */
 const issue = async ({ countryCode, phone }) => {

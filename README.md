@@ -35,7 +35,7 @@ Set `PASS_TIME_WINDOWS=relaxed` in `.env` to let meal tokens scan at any time on
 | `QR_SECRET` | Now required: the server will not start without it |
 | `VERCEL_PROJECT` | Vercel project name whose addresses CORS allows (default `crowdgrid-frontend`) |
 | `TEST_MONGO_URI` | Database for the test scripts; must end in `_test` (see below) |
-| `OTP_PROVIDER`, `OTP_REQUIRED` | Sign-up phone codes; `SIMULATED` shows the code on screen |
+| `OTP_PROVIDER`, `OTP_REQUIRED` | Sign-up phone codes, off by default (`OTP_REQUIRED=true` turns them on; `SIMULATED` shows the code on screen) |
 | `STATIC_PERSONAL_QR` | `allow` (default, with an ID-check warning) or `deny` fixed personal QRs; live 30-second QRs are always accepted |
 | `ROUTE_LANE_CAPACITY` | Plans per lane per 15 min before load-aware routing doubles its cost (default 40) |
 
