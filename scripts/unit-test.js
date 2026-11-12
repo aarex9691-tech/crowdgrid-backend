@@ -453,8 +453,16 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
     });
 
     await check('The server trusts one proxy hop (Render), so each pilgrim gets their own rate limit', () => {
-        const app = require('../server');
-        assert.equal(app.get('trust proxy'), 1);
+        // server.js refuses to load without its secrets; placeholders are enough (it does not connect or listen when required)
+        const placeholders = { MONGO_URI: 'mongodb://127.0.0.1:1/unit_test', JWT_SECRET: 'unit-test-only', QR_SECRET: 'unit-test-only' };
+        const missing = Object.keys(placeholders).filter((k) => !process.env[k]);
+        for (const k of missing) process.env[k] = placeholders[k];
+        try {
+            const app = require('../server');
+            assert.equal(app.get('trust proxy'), 1);
+        } finally {
+            for (const k of missing) delete process.env[k];
+        }
     });
 
     await check('Health check: connected and answering is ok; down or silent database is reported', async () => {
