@@ -222,10 +222,11 @@ async function main() {
             } finally {
                 pg.refund = realRefund;
             }
-            await orders.sweep(new Date(Date.now() + 30 * 60000));
+            const dupQueued = await Order.findById(dup._id).lean();
+            check('The failed refund is recorded so it can be retried', dupQueued.payment?.refundPending === true && dupQueued.refunded === bus.fare);
+            await orders.sweep(new Date(Date.now() + 30 * 60000)); // an old enough "stuck" order would be reset here
             const dupAfter = await Order.findById(dup._id).lean();
             check('A paid order stays paid when its refund fails (it can never be charged twice)', dupAfter.status === 'PAID' && !!dupAfter.payment?.paidAt, dupAfter.status);
-            check('The failed refund is recorded so it can be retried', dupAfter.payment?.refundPending === true && dupAfter.refunded === bus.fare);
 
             // Regression: the server stopped right after saving PAID, before issuing the pass. The sweep finishes it.
             {
