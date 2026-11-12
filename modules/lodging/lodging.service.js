@@ -3,7 +3,8 @@ const { Lodging, LodgingBooking, CATEGORIES } = require('./lodging.model');
 const Provider = require('../provider/provider.model');
 const Event = require('../event/event.model');
 const { issuePass, toClient, cancelPass } = require('../pass/pass.service');
-const { withTransaction } = require('../../utils/tx');
+const { withTransaction, isTransactional } = require('../../utils/tx');
+const { Pass } = require('../pass/pass.model');
 const bedAlloc = require('./beds');
 const audit = require('../audit/audit.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
@@ -98,15 +99,17 @@ const nightsBetween = (checkIn, checkOut) => nightsLib.nightsOf(checkIn, checkOu
  * without writing anything. Price is always computed here, never sent by the browser.
  */
 /** Beds this person already holds on the busiest of these nights; refuses going over the limit. */
-const checkPersonCap = async (userId, eventId, dates, count) => {
+const checkPersonCap = async (userId, eventId, dates, count, inCart = null) => {
     const mineHere = await LodgingBooking.find({ userId, eventId, status: 'CONFIRMED' }, 'beds checkIn checkOut nights').lean();
-    const already = Math.max(0, ...dates.map((d) => mineHere.filter((b) => (b.nights?.length ? b.nights : nightsLib.nightsOf(b.checkIn, b.checkOut)).includes(d)).reduce((s, b) => s + b.beds, 0)));
+    // inCart: beds for the same nights in earlier items of the same cart (Map "eventId|date" -> beds)
+    const cartOn = (d) => inCart?.get(`${eventId}|${d}`) || 0;
+    const already = Math.max(0, ...dates.map((d) => mineHere.filter((b) => (b.nights?.length ? b.nights : nightsLib.nightsOf(b.checkIn, b.checkOut)).includes(d)).reduce((s, b) => s + b.beds, 0) + cartOn(d)));
     if (already + count > MAX_BEDS_PER_USER) {
         throw badRequest(`Limit is ${MAX_BEDS_PER_USER} beds per person on any night. You already hold ${already} on these dates.`);
     }
 };
 
-const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } = {}, { requireNames = false, user = null } = {}) => {
+const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } = {}, { requireNames = false, user = null, inCart = null } = {}) => {
     const count = Number(beds);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BEDS_PER_USER) {
         throw badRequest(`You can book between 1 and ${MAX_BEDS_PER_USER} beds`);
@@ -123,7 +126,8 @@ const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } 
     }
     if (requireNames) guestNamesFor(guestNames, count);
     // The cart checks the per-person limit too, so nobody pays for beds that would then be refused
-    if (user) await checkPersonCap(user._id, lodging.eventId, stay.nights, count);
+    if (user) await checkPersonCap(user._id, lodging.eventId, stay.nights, count, inCart);
+    if (inCart) for (const d of stay.nights) inCart.set(`${lodging.eventId}|${d}`, (inCart.get(`${lodging.eventId}|${d}`) || 0) + count);
     // Beds chosen on the map must still be free on every night of the stay
     let where = null;
     if (bedNos !== undefined && bedNos !== null) {
@@ -254,6 +258,12 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
         await bedAlloc.release(bookingId).catch((e) => console.error(`[lodging] could not release beds of ${bookingId}: ${e.message}`));
         await nightsLib.releaseNights(lodging._id, dates, count).catch((e) => console.error(`[lodging] could not release nights of ${lodging._id} (${dates.join(', ')}): ${e.message}`));
         await releasePerson();
+        if (!isTransactional()) {
+            // Without transactions a half-written booking (and its pass) can be left behind: remove them,
+            // so the booking list matches the beds and limits that were just given back.
+            await LodgingBooking.deleteOne({ _id: bookingId }).catch((e) => console.error(`[lodging] could not remove half-written booking ${bookingId}: ${e.message}`));
+            await Pass.deleteMany({ type: 'LODGING', refId: bookingId }).catch((e) => console.error(`[lodging] could not remove the pass of ${bookingId}: ${e.message}`));
+        }
         throw err;
     }
     // The booking is confirmed from here on: these steps are best effort and never undo it

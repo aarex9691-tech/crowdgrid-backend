@@ -143,7 +143,7 @@ const login = async ({ phone, email, identifier, countryCode, password, ip }) =>
             // all devices together, counted over a rolling 15 minutes (the row expires with the window)
             const account = await LoginGuard.findOneAndUpdate(
                 { userId: user._id, client: '*' },
-                { $inc: { failed: 1 }, $set: { expireAt: lockAt } },
+                { $inc: { failed: 1 }, $setOnInsert: { expireAt: lockAt } }, // a fixed window from the first failure
                 { upsert: true, returnDocument: 'after' }
             );
             if (account.failed >= MAX_ACCOUNT_FAILS) {

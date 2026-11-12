@@ -106,12 +106,23 @@ const release = async (pass, user) => {
  * update that clears "pending", and only a pass without a reference is ever sent again.
  */
 const sendPassRefund = async (passId) => {
-    const pass = await Pass.findById(passId).lean();
-    if (!pass || !(pass.refund?.amount > 0) || pass.refund.reference) return false;
+    // Lease first, so two sweeps (or a sweep and a cancel) never send the same refund at once
+    const pass = await Pass.findOneAndUpdate(
+        { _id: passId, 'refund.amount': { $gt: 0 }, 'refund.reference': { $exists: false }, $or: [{ 'refund.leaseUntil': { $exists: false } }, { 'refund.leaseUntil': { $lt: new Date() } }] },
+        { $set: { 'refund.leaseUntil': new Date(Date.now() + 5 * 60000) } },
+        { returnDocument: 'after' }
+    ).lean();
+    if (!pass) return false;
     const orderId = pass.details?.orderId && mongoose.isValidObjectId(pass.details.orderId) ? pass.details.orderId : null;
     const order = orderId ? await Order.findById(orderId, 'payment.reference').lean() : null;
-    const r = await gateway().refund({ amount: pass.refund.amount, reference: order?.payment?.reference, idempotencyKey: `pass-refund:${pass._id}` });
-    const marked = await Pass.updateOne({ _id: pass._id, 'refund.reference': { $exists: false } }, { $set: { 'refund.reference': r.reference }, $unset: { 'refund.pending': 1 } });
+    let r;
+    try {
+        r = await gateway().refund({ amount: pass.refund.amount, reference: order?.payment?.reference, idempotencyKey: `pass-refund:${pass._id}` });
+    } catch (err) {
+        await Pass.updateOne({ _id: pass._id }, { $unset: { 'refund.leaseUntil': 1 } }).catch(() => {}); // the next retry may try again
+        throw err;
+    }
+    const marked = await Pass.updateOne({ _id: pass._id, 'refund.reference': { $exists: false } }, { $set: { 'refund.reference': r.reference }, $unset: { 'refund.pending': 1, 'refund.leaseUntil': 1 } });
     if (marked.modifiedCount && orderId) await Order.updateOne({ _id: orderId }, { $inc: { refunded: pass.refund.amount } });
     return true;
 };

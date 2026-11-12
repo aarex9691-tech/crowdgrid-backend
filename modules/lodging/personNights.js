@@ -39,7 +39,15 @@ const release = async (userId, eventId, dates, beds, session = null) => {
 const claim = async (userId, eventId, dates, beds, max) => {
     const taken = [];
     for (const date of dates) {
-        if (await claimOne({ userId, eventId, date }, beds, max)) {
+        let ok;
+        try {
+            ok = await claimOne({ userId, eventId, date }, beds, max);
+        } catch (err) {
+            // a database error part-way: give back the nights already claimed, then report the error
+            await release(userId, eventId, taken, beds).catch((e) => console.error(`[lodging] could not release the person cap for ${userId}: ${e.message}`));
+            throw err;
+        }
+        if (ok) {
             taken.push(date);
             continue;
         }

@@ -17,7 +17,7 @@ const User = require('../auth/user.model');
 const STUCK_PAYMENT_MIN = 5; // a payment still "processing" after this is treated as interrupted
 
 /** Prices one cart line on the server (the browser's price is never trusted). */
-const priceItem = async (raw, user) => {
+const priceItem = async (raw, user, inCart = null) => {
     const kind = String(raw?.kind || '').toUpperCase();
     const refId = String(raw?.refId || '');
     if (!mongoose.isValidObjectId(refId)) throw badRequest('Invalid item in cart');
@@ -29,7 +29,7 @@ const priceItem = async (raw, user) => {
             guestNames: Array.isArray(raw.input?.guestNames) ? raw.input.guestNames.map((n) => String(n).slice(0, 60)).slice(0, 5) : [], // one name per bed, up to 5
             ...(Array.isArray(raw.input?.bedNos) ? { bedNos: raw.input.bedNos.slice(0, 5).map(Number) } : {}), // beds chosen on the map
         };
-        const q = await lodging.quote(refId, input, { requireNames: true, user });
+        const q = await lodging.quote(refId, input, { requireNames: true, user, inCart });
         return { kind, refId, input: { ...input, ...q.stay }, label: q.label, detail: q.detail, amount: q.amount };
     }
     if (kind === 'TRANSIT') {
@@ -55,9 +55,10 @@ const create = async (user, items) => {
     if (!Array.isArray(items) || items.length === 0) throw badRequest('Your cart is empty');
     if (items.length > MAX_ITEMS) throw badRequest(`At most ${MAX_ITEMS} items per order`);
     const priced = [];
+    const inCart = new Map(); // beds per night across the cart, so two camp items cannot pass the limit together
     for (const raw of items) {
         try {
-            priced.push(await priceItem(raw, user));
+            priced.push(await priceItem(raw, user, inCart));
         } catch (err) {
             throw new HttpError(err.status || 400, `${raw?.label || 'An item'}: ${err.message}`);
         }
@@ -76,6 +77,7 @@ const findMine = async (orderId, user) => {
 
 /** Issues the passes for a paid order; anything that can no longer be issued is refunded. */
 const fulfil = async (order, user) => {
+    let due = 0; // only what failed in THIS run; earlier refunds and pass cancellations are already handled
     for (const item of order.items) {
         if (item.status !== 'PENDING') continue;
         const paidByOrder = { _id: order._id, amount: item.amount };
@@ -93,18 +95,19 @@ const fulfil = async (order, user) => {
             item.status = 'FAILED';
             item.error = err.message;
             order.refunded += item.amount;
+            due += item.amount;
         }
     }
-    if (order.refunded > 0) {
+    if (due > 0) {
         // The money must go back, but a gateway error here must not undo the payment record:
         // the order stays PAID and the refund is marked pending, so it can be retried and is never charged again.
         try {
-            const r = await gateway().refund({ amount: order.refunded, reference: order.payment.reference });
+            const r = await gateway().refund({ amount: due, reference: order.payment.reference, idempotencyKey: `order-refund:${order._id}:${order.refunded}` });
             order.payment.refundReference = r.reference;
-            order.payment.refundPending = undefined;
         } catch (err) {
             order.payment.refundPending = true;
-            order.payment.lastError = `Refund of ₹${order.refunded} not sent yet: ${err.message}`;
+            order.payment.refundPendingAmount = (order.payment.refundPendingAmount || 0) + due;
+            order.payment.lastError = `Refund of ₹${order.payment.refundPendingAmount} not sent yet: ${err.message}`;
             console.error(`[orders] refund failed for order ${order._id}: ${err.message}`);
         }
     }
@@ -225,16 +228,26 @@ const sweep = async (now = new Date()) => {
     }
     // Refunds the gateway refused earlier: orders (items that could not be issued) and cancelled passes
     let refunds = 0;
-    for (const order of await Order.find({ status: 'PAID', 'payment.refundPending': true }).limit(20)) {
+    for (const { _id } of await Order.find({ status: 'PAID', 'payment.refundPending': true }, '_id').limit(20).lean()) {
+        // Lease first, so two servers (or two sweeps) never send the same refund at once
+        const order = await Order.findOneAndUpdate(
+            { _id, 'payment.refundPending': true, $or: [{ 'payment.refundLeaseUntil': { $exists: false } }, { 'payment.refundLeaseUntil': { $lt: new Date() } }] },
+            { $set: { 'payment.refundLeaseUntil': new Date(Date.now() + 5 * 60000) } },
+            { returnDocument: 'after' }
+        ).lean();
+        if (!order) continue;
+        // Older records have no owed amount stored: everything refunded on the order was this refund
+        const amount = order.payment.refundPendingAmount ?? order.refunded;
         try {
-            const r = await gateway().refund({ amount: order.refunded, reference: order.payment.reference, idempotencyKey: `order-refund:${order._id}` });
+            const r = await gateway().refund({ amount, reference: order.payment.reference, idempotencyKey: `order-refund:${order._id}:${order.refunded}` });
             const marked = await Order.updateOne(
-                { _id: order._id, 'payment.refundPending': true },
-                { $set: { 'payment.refundReference': r.reference }, $unset: { 'payment.refundPending': 1, 'payment.lastError': 1 } }
+                { _id, 'payment.refundPending': true },
+                { $set: { 'payment.refundReference': r.reference }, $unset: { 'payment.refundPending': 1, 'payment.refundPendingAmount': 1, 'payment.refundLeaseUntil': 1, 'payment.lastError': 1 } }
             );
             refunds += marked.modifiedCount;
         } catch (e) {
-            console.error(`[refunds] order ${order._id}: retry failed: ${e.message}`);
+            await Order.updateOne({ _id }, { $unset: { 'payment.refundLeaseUntil': 1 } }).catch(() => {});
+            console.error(`[refunds] order ${_id}: retry failed: ${e.message}`);
         }
     }
     refunds += await require('../pass/cancel.service').retryPassRefunds();

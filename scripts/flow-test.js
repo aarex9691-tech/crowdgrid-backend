@@ -252,7 +252,7 @@ async function main() {
                 pg.refund = realRefund;
             }
             const dupQueued = await Order.findById(dup._id).lean();
-            check('The failed refund is recorded so it can be retried', dupQueued.payment?.refundPending === true && dupQueued.refunded === bus.fare);
+            check('The failed refund is recorded so it can be retried', dupQueued.payment?.refundPending === true && dupQueued.refunded === bus.fare && dupQueued.payment?.refundPendingAmount === bus.fare, `owed ${dupQueued.payment?.refundPendingAmount}`);
             await orders.sweep(new Date(Date.now() + 30 * 60000)); // an old enough "stuck" order would be reset here
             const dupAfter = await Order.findById(dup._id).lean();
             check('A paid order stays paid when its refund fails (it can never be charged twice)', dupAfter.status === 'PAID' && !!dupAfter.payment?.paidAt, dupAfter.status);
@@ -271,7 +271,7 @@ async function main() {
             }
             // Regression: another pass of the same order was cancelled and refunded on its own meanwhile.
             // The order retry must send only the refund it still owes, not that pass's money a second time.
-            await Order.updateOne({ _id: dup._id }, { $inc: { refunded: 77 } });
+            await Order.updateOne({ _id: dup._id }, { $inc: { refunded: 77 }, $set: { 'payment.refundPending': true }, $unset: { 'payment.refundReference': 1 } });
             const sentAmounts = [];
             pg.refund = async (args) => {
                 sentAmounts.push(args.amount);

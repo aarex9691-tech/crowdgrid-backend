@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const SosIncident = require('./sos.model');
 const { ROLES } = require('../../config/roles');
 const audit = require('../audit/audit.service');
-const { HttpError, badRequest, notFound, forbidden } = require('../../utils/httpError');
+const { badRequest, notFound, forbidden } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 
 const MAX_HISTORY = 50;
@@ -58,10 +58,25 @@ const raise = async (user, { eventId, lat, lng, accuracy, type: rawType, message
     }
 
     // A real emergency stays one open alert (updated above). Opening and closing alerts in a loop would
-    // flood the control room, so new alerts are capped per person; the message points to 112 instead.
+    // flood the control room, so new alerts are capped per person (more presses reopen the latest one).
     const lastTen = await SosIncident.countDocuments({ userId: user._id, createdAt: { $gte: new Date(Date.now() - SOS_WINDOW_MIN * 60000) } });
     if (lastTen >= MAX_SOS_PER_WINDOW) {
-        throw new HttpError(429, `You have sent ${lastTen} alerts in ${SOS_WINDOW_MIN} minutes, so new ones are paused for a few minutes. If you are in danger, call 112 now.`);
+        // Never refuse an alert: it may be the real one. Reopen the person's latest alert with the new details instead.
+        const latest = await SosIncident.findOne({ userId: user._id }).sort({ createdAt: -1 });
+        latest.status = 'OPEN';
+        latest.resolvedAt = undefined;
+        latest.closedByUser = false;
+        if (type) latest.type = type;
+        if (message) latest.message = message;
+        if (hasGps) {
+            latest.location = location;
+            latest.locationHistory.push({ lat: location.lat, lng: location.lng, at: new Date() });
+            if (latest.locationHistory.length > MAX_HISTORY) latest.locationHistory.splice(0, latest.locationHistory.length - MAX_HISTORY);
+        }
+        await latest.save();
+        realtime.notify(['control', 'volunteers'], 'sos', { action: 'raised', id: String(latest._id), type: latest.type });
+        if (hasGps) realtime.notify(['public'], 'route', {});
+        return { incident: latest.toObject(), updated: true, reopened: true };
     }
 
     const incident = await SosIncident.create({

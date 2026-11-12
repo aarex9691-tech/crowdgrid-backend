@@ -16,7 +16,14 @@ const list = async (eventId) => {
     const routes = await TransitRoute.find({ eventId, isActive: true }).sort({ kind: 1, name: 1 }).lean();
     const shuttles = routes.filter((r) => r.kind === 'SHUTTLE');
     if (!shuttles.length) return routes;
-    const day = await travelDay(shuttles[0]);
+    let day;
+    try {
+        day = await travelDay(shuttles[0]);
+    } catch (err) {
+        if (err.status !== 400) throw err;
+        // The yatra is over: the routes still show (procession routes need no pass), with no seats to book
+        return routes.map((r) => (r.kind === 'SHUTTLE' ? { ...r, seatsPerDay: seatsPerDayOf(r), seatsLeft: 0, closed: err.message } : r));
+    }
     const rows = await TransitDay.find({ routeId: { $in: shuttles.map((r) => r._id) }, date: day }, 'routeId booked').lean();
     const booked = new Map(rows.map((r) => [String(r.routeId), r.booked]));
     return routes.map((r) => {
