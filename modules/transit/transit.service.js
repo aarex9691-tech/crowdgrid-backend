@@ -22,7 +22,7 @@ const list = async (eventId, { date } = {}) => {
     try {
         ({ day, prebooking } = await dayFor(shuttles[0], date));
     } catch (err) {
-        if (err.status !== 400 || !/ended|closed/.test(err.message)) throw err;
+        if (err.code !== 'EVENT_CLOSED') throw err;
         // The yatra is over: the routes still show (procession routes need no pass), with no seats to book
         return routes.map((r) => (r.kind === 'SHUTTLE' ? { ...r, seatsPerDay: seatsPerDayOf(r), seatsLeft: 0, closed: err.message } : r));
     }

@@ -510,6 +510,7 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.throws(() => ew.assertDay(running, addDays(t, -1)), /passed/);
         assert.equal(ew.assertDay(running, addDays(t, -1), { allowPast: true }), addDays(t, -1));
         assert.throws(() => ew.assertOpen({ ...running, status: 'ARCHIVED' }), /closed/);
+        assert.throws(() => ew.assertOpen({ ...running, status: 'ARCHIVED' }), (e) => e.code === 'EVENT_CLOSED' && e.status === 400);
         assert.throws(() => ew.assertOpen({ ...running, endDate: at(addDays(t, -1)) }), /ended/);
         assert.throws(() => ew.assertOpen({ ...running, kind: 'PUBLIC', status: 'ARCHIVED' }), /This event is closed/);
         assert.equal(require('../modules/lodging/nights').MAX_NIGHTS, 5);

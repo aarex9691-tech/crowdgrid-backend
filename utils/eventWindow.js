@@ -17,11 +17,13 @@ const windowOf = (event, today = istDate()) => {
 };
 
 /** Throws 400 unless the event still takes bookings (not closed by staff, not over). */
+const closed = (message) => Object.assign(badRequest(message), { code: 'EVENT_CLOSED' }); // callers can tell "over" from a bad input
+
 const assertOpen = (event) => {
     if (!event) throw notFound('Event not found');
     const word = wordFor(event);
-    if (event.status === 'ARCHIVED') throw badRequest(`This ${word} is closed and no longer open for bookings`);
-    if (istDate(event.endDate) < istDate()) throw badRequest(`This ${word} has ended. Bookings are closed.`);
+    if (event.status === 'ARCHIVED') throw closed(`This ${word} is closed and no longer open for bookings`);
+    if (istDate(event.endDate) < istDate()) throw closed(`This ${word} has ended. Bookings are closed.`);
 };
 
 /** Throws 400 unless `day` (YYYY-MM-DD) is a day of the event; past days too unless allowPast. */

@@ -7,7 +7,7 @@ const { withTransaction, isTransactional } = require('../../utils/tx');
 const { Pass } = require('../pass/pass.model');
 const bedAlloc = require('./beds');
 const audit = require('../audit/audit.service');
-const { istDate, istDateTime, isDateString } = require('../../utils/time');
+const { istDate, istDateTime, isDateString, addDays } = require('../../utils/time');
 const { HttpError, badRequest, notFound, conflict, forbidden } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 
@@ -29,9 +29,13 @@ const search = async (eventId, { sector, category, minBeds, checkIn, checkOut } 
     if (sector) filter.sector = String(sector);
     if (category && CATEGORIES.includes(String(category))) filter.category = String(category);
 
-    const event = await Event.findById(eventId, 'startDate endDate').lean();
-    const first = isDateString(checkIn) ? checkIn : nightsLib.defaultNight(event);
-    const last = isDateString(checkOut) && checkOut >= first ? checkOut : first;
+    const event = await Event.findById(eventId, 'kind startDate endDate status').lean();
+    if (!event) throw notFound('Event not found');
+    // Availability only for nights that could be booked: days of the yatra, a stay of 5 nights at most
+    const w = eventWindow.windowOf(event);
+    const first = isDateString(checkIn) && checkIn >= w.first && checkIn <= w.end ? checkIn : w.first;
+    const lastAllowed = [addDays(first, nightsLib.MAX_NIGHTS), w.end].sort()[0];
+    const last = isDateString(checkOut) && checkOut >= first && checkOut <= lastAllowed ? checkOut : first;
 
     const lodgings = await Lodging.find(filter).populate('providerId', 'name type verificationStatus').lean();
     await nightsLib.attachAvailability(lodgings, { checkIn: first, checkOut: last });
@@ -77,6 +81,7 @@ const stayMap = async (lodgingId, { checkIn, checkOut } = {}) => {
     if (!lodging || !lodging.isActive) throw notFound('Camp not found');
     if (lodging.providerId?.verificationStatus !== 'VERIFIED') throw forbidden('This camp is not verified yet');
     const event = await Event.findById(lodging.eventId).lean();
+    eventWindow.assertOpen(event); // the bed map is for choosing beds to book
     const stay = parseStay(event, checkIn, checkOut);
     const taken = await bedAlloc.takenOn(lodging._id, stay.nights);
     const unit = bedAlloc.unitFor(lodging);
