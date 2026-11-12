@@ -29,19 +29,23 @@ const resolveProvider = async (user, providerId) => {
 
 const dashboard = async (user, providerId) => {
     const provider = await resolveProvider(user, providerId);
-    const today = istDate();
+    const realToday = istDate();
+    // The day the dashboard shows (beds left, meal quotas): today, or day 1 of a yatra that has not started yet
+    const event = provider.eventId ? await Event.findById(provider.eventId, 'kind startDate endDate status').lean() : null;
+    const today = event ? eventWindow.windowOf(event).first : realToday;
     const [lodgings, centers] = await Promise.all([
         Lodging.find({ providerId: provider._id }).sort({ sector: 1 }).lean().then((ls) => nightsLib.attachAvailability(ls, { checkIn: today })),
         FoodCenter.find({ providerId: provider._id }).lean(),
     ]);
     const [slots, checkInsToday, bookings] = await Promise.all([
         FoodSlot.find({ foodCenterId: { $in: centers.map((c) => c._id) }, date: today }).lean(),
-        Pass.countDocuments({ providerId: provider._id, status: 'REDEEMED', redeemedAt: { $gte: istDateTime(today, '00:00') } }),
+        Pass.countDocuments({ providerId: provider._id, status: 'REDEEMED', redeemedAt: { $gte: istDateTime(realToday, '00:00') } }),
         LodgingBooking.countDocuments({ lodgingId: { $in: lodgings.map((l) => l._id) }, status: 'CONFIRMED' }),
     ]);
     return {
         provider,
-        today,
+        today, // the day shown: day 1 before the yatra starts
+        prebooking: !!event && eventWindow.windowOf(event).prebooking,
         totals: {
             beds: lodgings.reduce((s, l) => s + l.totalBeds, 0),
             available: lodgings.reduce((s, l) => s + l.availableBeds, 0),
