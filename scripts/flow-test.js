@@ -271,7 +271,7 @@ async function main() {
             }
             // Regression: another pass of the same order was cancelled and refunded on its own meanwhile.
             // The order retry must send only the refund it still owes, not that pass's money a second time.
-            await Order.updateOne({ _id: dup._id }, { $inc: { refunded: 77 }, $set: { 'payment.refundPending': true, 'payment.refundPendingAmount': bus.fare }, $unset: { 'payment.refundReference': 1 } });
+            await Order.updateOne({ _id: dup._id }, { $inc: { refunded: 77 }, $set: { 'payment.refundPending': true, 'payment.refundPendingAmount': bus.fare, 'payment.refundKey': dupQueued.payment?.refundKey }, $unset: { 'payment.refundReference': 1 } });
             const sentAmounts = [];
             const sentKeys = [];
             pg.refund = async (args) => {
