@@ -110,7 +110,36 @@ async function main() {
         {
             // Regression: the cart must refuse it too, before the pilgrim pays (not book-then-refund)
             const anyPaid = camps.find((c) => c.pricePerNight > 0);
+            {
+                // Regression: two camp items in one cart (3 + 3 beds on the same night) must not each pass on their own
+                const { addDays } = require('../utils/time');
+                const night3 = addDays(five.booking.checkIn, 3);
+                const three = ['Kiran Patil', 'Sona Patil', 'Raju Patil'];
+                await expectError('One cart cannot hold more than 5 beds for the same night', () => orders.create(user, [
+                    { kind: 'LODGING', refId: String(anyPaid._id), input: { beds: 3, guestNames: three, checkIn: night3, checkOut: night3 } },
+                    { kind: 'LODGING', refId: String(anyPaid._id), input: { beds: 3, guestNames: three, checkIn: night3, checkOut: night3 } },
+                ]), 400, /limit/i);
+            }
             await expectError('The cart refuses a 6th bed on the same night before payment', () => orders.create(user, [{ kind: 'LODGING', refId: String(anyPaid._id), input: { beds: 1, guestNames: ['Kiran Patil'], checkIn: five.booking.checkIn, checkOut: five.booking.checkIn } }]), 400, /limit/i);
+        }
+
+        {
+            // Regression: a database error part-way through claiming nights must give back the nights already claimed
+            const pn = require('../modules/lodging/personNights');
+            const ghostUser = new mongoose.Types.ObjectId();
+            const ghostEvent = new mongoose.Types.ObjectId();
+            const realFind = pn.PersonNight.findOneAndUpdate;
+            let calls = 0;
+            pn.PersonNight.findOneAndUpdate = function (...args) {
+                calls += 1;
+                if (calls === 2) throw new Error('connection reset');
+                return realFind.apply(this, args);
+            };
+            const claimErr = await pn.claim(ghostUser, ghostEvent, ['2030-01-01', '2030-01-02'], 2, 5).catch((e) => e);
+            pn.PersonNight.findOneAndUpdate = realFind;
+            const leftRows = await pn.PersonNight.find({ userId: ghostUser }).lean();
+            check('A failed claim gives back the nights it already took', claimErr?.message === 'connection reset' && leftRows.every((r) => r.beds === 0), leftRows.map((r) => `${r.date}:${r.beds}`).join(', '));
+            await pn.PersonNight.deleteMany({ userId: ghostUser });
         }
 
         // ---- 2b. Beds are counted night by night ----
@@ -240,9 +269,22 @@ async function main() {
                 check('A paid order left without its pass (server stopped) is finished by the sweep', finishedOrder.items[0].status === 'ISSUED' && !!finishedOrder.items[0].passId && swept2.finished >= 1, finishedOrder.items[0].status);
                 if (finishedOrder.items[0].passId) await require('../modules/pass/cancel.service').cancel(finishedOrder.items[0].passId, user).catch(() => {});
             }
-            await orders.sweep();
+            // Regression: another pass of the same order was cancelled and refunded on its own meanwhile.
+            // The order retry must send only the refund it still owes, not that pass's money a second time.
+            await Order.updateOne({ _id: dup._id }, { $inc: { refunded: 77 } });
+            const sentAmounts = [];
+            pg.refund = async (args) => {
+                sentAmounts.push(args.amount);
+                return realRefund.call(pg, args);
+            };
+            try {
+                await orders.sweep();
+            } finally {
+                pg.refund = realRefund;
+            }
             const dupRetried = await Order.findById(dup._id).lean();
             check('The queued order refund is sent by the sweep', !dupRetried.payment?.refundPending && !!dupRetried.payment?.refundReference);
+            check("The order retry sends only what it still owes (never another pass's refund again)", sentAmounts.includes(bus.fare) && !sentAmounts.includes(bus.fare + 77), `sent ${sentAmounts.join(', ')}`);
         }
 
         // ---- 5. Family meal token ----
@@ -469,16 +511,21 @@ async function main() {
             check('"I\'m safe now" closes the alert', closed.status === 'RESOLVED' && closed.closedByUser === true);
             await expectError('A closed alert cannot be closed again', () => sosSvc.closeMine(String(s1.incident._id), user), 404);
             // Regression: raising and cancelling alerts in a loop floods the control room
-            let throttled = null;
-            for (let i = 0; i < 8 && !throttled; i += 1) {
+            // but a real emergency after that must still reach the control room (never refused)
+            await SosIncident.deleteMany({ userId: me._id });
+            let refused = null;
+            let last = null;
+            for (let i = 0; i < 8 && !refused; i += 1) {
                 try {
-                    const a = await sosSvc.raise(user, { eventId: String(event._id), type: 'GENERAL' });
-                    await sosSvc.closeMine(String(a.incident._id), user);
+                    last = await sosSvc.raise(user, { eventId: String(event._id), type: 'MEDICAL', message: `press ${i}` });
+                    if (i < 7) await sosSvc.closeMine(String(last.incident._id), user);
                 } catch (e) {
-                    throttled = e;
+                    refused = e;
                 }
             }
-            check('More than 5 alerts in 10 minutes from one person are slowed down (and told to call 112)', throttled?.status === 429 && /112/.test(throttled.message), throttled?.message);
+            const sosRows = await SosIncident.countDocuments({ userId: me._id });
+            check('Alerts sent in a loop do not flood the control room (at most 5 new ones in 10 minutes)', sosRows === 5, `${sosRows} alerts`);
+            check('An alert after that is never refused: the latest one is reopened with the new details', !refused && last?.incident?.status === 'OPEN' && last.incident.message === 'press 7', refused?.message || last?.incident?.status);
             await SosIncident.deleteMany({ userId: me._id });
         }
         const publicView = await lostfound.list(null, { kind: 'MISSING' });
@@ -494,6 +541,8 @@ async function main() {
             await Event.updateOne({ _id: event._id }, { $set: { endDate: new Date(Date.now() - 2 * 86400000) } });
             try {
                 await expectError('No bus pass once the yatra has ended', () => transit.boardingPass(freeBus._id, user, { people: 1 }), 400, /ended/i);
+                const endedList = await transit.list(String(event._id)).catch((e) => e);
+                check('The bus list still opens after the yatra ends (with no seats left)', Array.isArray(endedList) && endedList.filter((r) => r.kind === 'SHUTTLE').every((r) => r.seatsLeft === 0), endedList?.message);
             } finally {
                 await Event.updateOne({ _id: event._id }, { $set: { endDate: realEnd } });
             }
@@ -652,6 +701,14 @@ async function main() {
             await expectError('After 5 wrong passwords that device is locked out', () => auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '203.0.113.7' }), 429);
             const ownPhone = await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '198.51.100.20' }).catch((e) => e);
             check('The pilgrim can still log in from their own phone', !!ownPhone.token, ownPhone.message);
+            // Regression: the account-wide count is a fixed 15-minute window, not pushed out by every wrong password
+            await auth.login({ identifier: PHONE, password: 'Wrong-0000', ip: '192.0.2.44' }).catch(() => {});
+            const firstWindow = (await auth.LoginGuard.findOne({ userId: ownPhone.user?._id || ownPhone.user?.id, client: '*' }).lean())?.expireAt;
+            await new Promise((r) => setTimeout(r, 20));
+            await auth.login({ identifier: PHONE, password: 'Wrong-0000', ip: '192.0.2.44' }).catch(() => {});
+            const secondWindow = (await auth.LoginGuard.findOne({ userId: ownPhone.user?._id || ownPhone.user?.id, client: '*' }).lean())?.expireAt;
+            check('The account-wide count of wrong passwords keeps its first 15-minute window', !!firstWindow && +firstWindow === +secondWindow, `${firstWindow?.toISOString()} then ${secondWindow?.toISOString()}`);
+            await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '192.0.2.44' }); // clears the counters
         }
 
         // ---- Help desk password reset (last: it changes the test pilgrim's password) ----
