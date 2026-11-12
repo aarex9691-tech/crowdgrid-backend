@@ -156,8 +156,8 @@ async function main() {
             await lodging.cancel(nextStay.booking._id, user);
             const event2 = await Event.findById(event._id).lean();
             const lastDay = require('../utils/time').istDate(event2.endDate);
-            if (addDays(night, 8) <= lastDay) {
-                await expectError('Stays longer than 7 nights are refused', () => lodging.book(bigCamp._id, user, { beds: 1, checkIn: night, checkOut: addDays(night, 8) }), 400, /7 nights/);
+            if (addDays(night, 6) <= lastDay) {
+                await expectError('Stays longer than 5 nights are refused', () => lodging.book(bigCamp._id, user, { beds: 1, checkIn: night, checkOut: addDays(night, 6) }), 400, /5 nights/);
             }
         }
         await lodging.cancel(five.booking._id, user);
@@ -636,6 +636,50 @@ async function main() {
             const preMeal = await food.claim(wariSlot._id, user, { people: 1 }).catch((e) => e);
             check('A meal token can be pre-booked for a day of the yatra, and is marked so', preMeal.pass?.details?.prebooked === true, preMeal.message);
         }
+        {
+            // ---- 12c. Every booking stays within the yatra's own days ----
+            const { addDays } = require('../utils/time');
+            const wariStart = istDate(wariEv.startDate);
+            const wariEnd = istDate(wariEv.endDate);
+            const before = addDays(wariStart, -10);
+            // Stay
+            await expectError('A camp cannot be booked for a night before the yatra starts', () => lodging.book(wariCamp._id, user, { beds: 1, checkIn: before, checkOut: addDays(before, 1) }), 400, /day of the yatra|starts on/i);
+            await expectError('The cart refuses a stay before the yatra starts', () => lodging.quote(wariCamp._id, { beds: 1, checkIn: before, checkOut: addDays(before, 1) }), 400, /day of the yatra|starts on/i);
+            const fiveNights = await lodging.book(wariCamp._id, user, { beds: 1, checkIn: wariStart, checkOut: addDays(wariStart, 5) }).catch((e) => e);
+            check('A 5-night stay is allowed', fiveNights.booking?.nights?.length === 5, fiveNights.message);
+            if (fiveNights.booking) await lodging.cancel(fiveNights.booking._id, user);
+            await expectError('A 6-night stay is refused (5 nights at most)', () => lodging.book(wariCamp._id, user, { beds: 1, checkIn: wariStart, checkOut: addDays(wariStart, 6) }), 400, /5 nights/);
+            // Meals
+            const wariCenter = await FoodCenter.findOne({ eventId: wariEv._id }).lean();
+            const strayLunch = await FoodSlot.create({ foodCenterId: wariCenter._id, eventId: wariEv._id, date: addDays(wariStart, -3), meal: 'LUNCH', startTime: '11:30', endTime: '14:30', capacity: 10, remaining: 10 });
+            try {
+                await expectError('A meal token cannot be taken for a day outside the yatra', () => food.claim(strayLunch._id, user, { people: 1 }), 400, /day of the yatra|starts on/i);
+            } finally {
+                await FoodSlot.deleteOne({ _id: strayLunch._id });
+            }
+            const ngoSvc = require('../modules/ngo/ngo.service');
+            const superAdmin = await User.findOne({ role: 'SUPER_ADMIN' }).lean();
+            const sa = { ...superAdmin, id: String(superAdmin._id) };
+            await expectError('A kitchen cannot open meal slots before the yatra starts', () => ngoSvc.setSlot(sa, wariCenter._id, { date: addDays(wariStart, -3), meal: 'LUNCH', capacity: 50 }), 400, /day of the yatra|starts on/i);
+            await expectError('A kitchen cannot open meal slots after the yatra ends', () => ngoSvc.setSlot(sa, wariCenter._id, { date: addDays(wariEnd, 1), meal: 'LUNCH', capacity: 50 }), 400, /day of the yatra|ended/i);
+            const runningCenter = await FoodCenter.findOne({ eventId: event._id, isActive: { $ne: false } }).lean();
+            await expectError('A kitchen cannot open meal slots for a day that has passed', () => ngoSvc.setSlot(sa, runningCenter._id, { date: addDays(istDate(), -1), meal: 'LUNCH', capacity: 50 }), 400, /passed/i);
+            // Seva
+            const volunteers = require('../modules/volunteer/volunteer.service');
+            await expectError('Seva days must be days of the yatra', () => volunteers.apply(user, { eventId: String(wariEv._id), domain: 'CROWD_CONTROL', dates: [addDays(wariStart, -5)] }), 400, /day of the yatra|starts on/i);
+            await expectError('Seva days must be real dates', () => volunteers.apply(user, { eventId: String(wariEv._id), domain: 'CROWD_CONTROL', dates: ['someday'] }), 400);
+            const archivedYatra = await Event.findOne({ _id: { $in: groupIds }, status: 'ARCHIVED' }).lean();
+            if (archivedYatra) await expectError('No seva applications for a closed event', () => volunteers.apply(user, { eventId: String(archivedYatra._id), domain: 'CROWD_CONTROL', dates: [] }), 400, /no longer open|ended/i);
+            // A yatra that has been closed takes no stays or meal tokens
+            await Event.updateOne({ _id: wariEv._id }, { $set: { status: 'ARCHIVED' } });
+            try {
+                await expectError('A closed yatra takes no camp bookings', () => lodging.quote(wariCamp._id, { beds: 1, checkIn: wariStart, checkOut: wariStart }), 400, /no longer open|closed/i);
+                const anySlot = await FoodSlot.findOne({ eventId: wariEv._id, date: { $gte: wariStart } }).lean();
+                await expectError('A closed yatra gives no meal tokens', () => food.claim(anySlot._id, user, { people: 1 }), 400, /no longer open|closed/i);
+            } finally {
+                await Event.updateOne({ _id: wariEv._id }, { $set: { status: 'ACTIVE' } });
+            }
+        }
         check('Vivekananda Kendra is a verified seva organisation', !!(await Provider.exists({ name: 'Vivekananda Kendra', verificationStatus: 'VERIFIED' })));
 
         // ---- 13. Cancellation and refunds from the passbook ----
@@ -799,7 +843,7 @@ async function main() {
             for (const bk of myBookings) await lodging.cancel(bk._id, { ...me });
             const mealPasses = await Pass.find({ userId: me._id, type: 'MEAL' }).lean();
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
-            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lodging/personNights').PersonNight.deleteMany({ userId: me._id }), auth.LoginGuard.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id }), require('../modules/lostfound/photo.model').Photo.deleteMany({ uploadedBy: me._id })]);
+            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lodging/personNights').PersonNight.deleteMany({ userId: me._id }), auth.LoginGuard.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id }), require('../modules/volunteer/volunteer.model').VolunteerApplication.deleteMany({ userId: me._id }), require('../modules/lostfound/photo.model').Photo.deleteMany({ uploadedBy: me._id })]);
             await require('../modules/auth/avatar').Avatar.deleteMany({ userId: me._id });
             await User.deleteOne({ _id: me._id });
         }
