@@ -12,6 +12,7 @@ const realtime = require('../../utils/realtime');
 
 const { MAX_PER_ACCOUNT } = require('../../utils/limits');
 const nightsLib = require('./nights');
+const personNights = require('./personNights');
 const MAX_BEDS_PER_USER = MAX_PER_ACCOUNT; // 5 beds per account on any one night
 
 /**
@@ -96,7 +97,16 @@ const nightsBetween = (checkIn, checkOut) => nightsLib.nightsOf(checkIn, checkOu
  * Price check for the cart: validates the request exactly like a booking would,
  * without writing anything. Price is always computed here, never sent by the browser.
  */
-const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } = {}, { requireNames = false } = {}) => {
+/** Beds this person already holds on the busiest of these nights; refuses going over the limit. */
+const checkPersonCap = async (userId, eventId, dates, count) => {
+    const mineHere = await LodgingBooking.find({ userId, eventId, status: 'CONFIRMED' }, 'beds checkIn checkOut nights').lean();
+    const already = Math.max(0, ...dates.map((d) => mineHere.filter((b) => (b.nights?.length ? b.nights : nightsLib.nightsOf(b.checkIn, b.checkOut)).includes(d)).reduce((s, b) => s + b.beds, 0)));
+    if (already + count > MAX_BEDS_PER_USER) {
+        throw badRequest(`Limit is ${MAX_BEDS_PER_USER} beds per person on any night. You already hold ${already} on these dates.`);
+    }
+};
+
+const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } = {}, { requireNames = false, user = null } = {}) => {
     const count = Number(beds);
     if (!Number.isInteger(count) || count < 1 || count > MAX_BEDS_PER_USER) {
         throw badRequest(`You can book between 1 and ${MAX_BEDS_PER_USER} beds`);
@@ -112,6 +122,8 @@ const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } 
         throw conflict(lodging.availableBeds === 0 ? 'Sold out for these dates - no beds left at this camp' : `Only ${lodging.availableBeds} bed(s) left for these dates`);
     }
     if (requireNames) guestNamesFor(guestNames, count);
+    // The cart checks the per-person limit too, so nobody pays for beds that would then be refused
+    if (user) await checkPersonCap(user._id, lodging.eventId, stay.nights, count);
     // Beds chosen on the map must still be free on every night of the stay
     let where = null;
     if (bedNos !== undefined && bedNos !== null) {
@@ -169,15 +181,20 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
     const dates = stay.nights;
     const chosen = bedNos !== undefined && bedNos !== null ? bedAlloc.checkChosen(lodging, bedNos, count) : null;
 
-    // Per-person cap: at most 5 beds on any one night (stays on other nights don't count)
-    const mineHere = await LodgingBooking.find({ userId: user._id, eventId: lodging.eventId, status: 'CONFIRMED' }, 'beds checkIn checkOut nights').lean();
-    const already = Math.max(0, ...dates.map((d) => mineHere.filter((b) => (b.nights?.length ? b.nights : nightsLib.nightsOf(b.checkIn, b.checkOut)).includes(d)).reduce((s, b) => s + b.beds, 0)));
-    if (already + count > MAX_BEDS_PER_USER) {
-        throw badRequest(`Limit is ${MAX_BEDS_PER_USER} beds per person on any night. You already hold ${already} on these dates.`);
-    }
+    // Per-person cap: at most 5 beds on any one night (stays on other nights don't count).
+    // The read gives a clear message; the atomic per-person counter is what holds under a race.
+    await checkPersonCap(user._id, lodging.eventId, dates, count);
+    await personNights.claim(user._id, lodging.eventId, dates, count, MAX_BEDS_PER_USER);
+    const releasePerson = () =>
+        personNights.release(user._id, lodging.eventId, dates, count).catch((e) => console.error(`[lodging] could not release the person cap for ${user._id}: ${e.message}`));
 
     // 1. Claim every night atomically (all or nothing)
-    await nightsLib.claimStay(lodging, dates, count);
+    try {
+        await nightsLib.claimStay(lodging, dates, count);
+    } catch (err) {
+        await releasePerson();
+        throw err;
+    }
 
     // 2. Number the beds (tent + bed), the same beds every night
     const bookingId = new mongoose.Types.ObjectId();
@@ -186,6 +203,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
         bedNumbers = chosen ? await bedAlloc.allocateChosen(lodging, bookingId, chosen, dates) : await bedAlloc.allocate(lodging, bookingId, count, dates);
     } catch (err) {
         await nightsLib.releaseNights(lodging._id, dates, count);
+        await releasePerson();
         throw err;
     }
     const where = bedAlloc.describe(lodging, bedNumbers);
@@ -235,6 +253,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
         // so a failing release is logged and the original error still reaches the pilgrim.
         await bedAlloc.release(bookingId).catch((e) => console.error(`[lodging] could not release beds of ${bookingId}: ${e.message}`));
         await nightsLib.releaseNights(lodging._id, dates, count).catch((e) => console.error(`[lodging] could not release nights of ${lodging._id} (${dates.join(', ')}): ${e.message}`));
+        await releasePerson();
         throw err;
     }
     // The booking is confirmed from here on: these steps are best effort and never undo it
@@ -263,6 +282,7 @@ const cancel = async (bookingId, user, { passUpdate = {} } = {}) => {
         if (!booking) throw notFound('Active booking not found');
         const dates = booking.nights?.length ? booking.nights : nightsLib.nightsOf(booking.checkIn, booking.checkOut);
         await nightsLib.releaseNights(booking.lodgingId, dates, booking.beds, session);
+        await personNights.release(booking.userId, booking.eventId, dates, booking.beds, session);
         await bedAlloc.release(booking._id, session);
         await cancelPass(booking.passId, session, passUpdate);
         audit.record({ actor: user, action: 'BOOKING_CANCELLED', targetType: 'LodgingBooking', targetId: booking._id, summary: `${user.name} cancelled a ${booking.beds}-bed booking` });

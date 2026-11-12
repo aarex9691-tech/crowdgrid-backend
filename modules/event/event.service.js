@@ -382,6 +382,7 @@ const register = async (eventId, user, { paidByOrder = null, people = 1 } = {}) 
     people = groupSize(people, 'tickets');
     const event = await findEvent(eventId);
     if (event.kind !== 'PUBLIC') throw badRequest('Registration is only for public events');
+    if (event.status !== 'ACTIVE') throw badRequest('This event is no longer open for registration');
     if (event.endDate < new Date()) throw badRequest('This event has already ended');
     if ((event.ticketPrice || 0) > 0 && !paidByOrder) {
         throw new HttpError(402, `Tickets cost ₹${event.ticketPrice}. Add the event to your cart and pay at checkout.`);

@@ -42,8 +42,10 @@ const quote = async (routeId, people = 1) => {
 
 /** Travel day: today, or the yatra's first day when it has not started yet (Wari, Rath Yatra). */
 const travelDay = async (route) => {
-    const ev = await Event.findById(route.eventId, 'startDate').lean();
+    const ev = await Event.findById(route.eventId, 'startDate endDate status').lean();
     const today = istDate();
+    // Nothing to travel to once the yatra is over (or archived)
+    if (ev?.status === 'ARCHIVED' || (ev?.endDate && istDate(ev.endDate) < today)) throw badRequest('This yatra has ended. Shuttle passes are closed.');
     const first = ev?.startDate ? istDate(ev.startDate) : today;
     return first > today ? first : today;
 };

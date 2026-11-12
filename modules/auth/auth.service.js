@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('./user.model');
@@ -23,8 +24,24 @@ function ageOn(isoDay) {
     if (tm < mo || (tm === mo && td < d)) age -= 1;
     return age < 0 ? null : age;
 }
-const MAX_FAILED_LOGINS = 5;
+const MAX_FAILED_LOGINS = 5; // wrong passwords from ONE device before that device is paused
 const LOCK_MINUTES = 15;
+// Wrong passwords from ALL devices together before the whole account is paused (stops guessing from
+// many addresses) - high enough that a stranger cannot lock a pilgrim out of their own phone.
+const MAX_ACCOUNT_FAILS = 30;
+
+/** Wrong-password count per account and device; MongoDB deletes rows after the lock window. */
+const loginGuardSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    client: { type: String, required: true }, // the device's IP address (behind Render's proxy)
+    failed: { type: Number, default: 0 },
+    lockUntil: Date,
+    expireAt: { type: Date, required: true },
+});
+loginGuardSchema.index({ userId: 1, client: 1 }, { unique: true });
+loginGuardSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
+const LoginGuard = mongoose.models.LoginGuard || mongoose.model('LoginGuard', loginGuardSchema);
+const lockedFor = (until) => Math.max(1, Math.ceil((until - Date.now()) / 60000));
 
 const signToken = (user) =>
     jwt.sign({ sub: String(user._id), role: user.role, name: user.name, tv: user.tokenVersion || 0 }, process.env.JWT_SECRET, {
@@ -91,49 +108,68 @@ const register = async ({ name: rawName, phone, countryCode, email, password, ot
 };
 
 /** Log in with mobile number (or email) and password. */
-const login = async ({ phone, email, identifier, countryCode, password }) => {
+const login = async ({ phone, email, identifier, countryCode, password, ip }) => {
     const id = String(identifier || phone || email || '').trim();
     if (!id || !password) throw badRequest('Mobile number and password are required');
 
     const query = id.includes('@') ? { email: id.toLowerCase() } : phoneQuery(parseLoginPhone(id, countryCode));
     const user = await User.findOne(query).select('+passwordHash');
 
-    // Account lockout: refuse while locked, even if the password is right
-    if (user && user.lockUntil && user.lockUntil > new Date()) {
-        const mins = Math.ceil((user.lockUntil - Date.now()) / 60000);
-        throw new HttpError(429, `Too many wrong attempts. This account is locked for ${mins} more minute${mins > 1 ? 's' : ''}.`);
+    // Refuse while this device, or (after very many failures everywhere) the whole account, is paused
+    const client = String(ip || 'unknown');
+    if (user) {
+        const now = new Date();
+        if (user.lockUntil && user.lockUntil > now) {
+            const mins = lockedFor(user.lockUntil);
+            throw new HttpError(429, `Too many wrong attempts on this account. Try again in ${mins} minute${mins > 1 ? 's' : ''}, or visit a help desk.`);
+        }
+        const guard = await LoginGuard.findOne({ userId: user._id, client }).lean();
+        if (guard?.lockUntil && guard.lockUntil > now) {
+            const mins = lockedFor(guard.lockUntil);
+            throw new HttpError(429, `Too many wrong attempts from this device. Try again in ${mins} minute${mins > 1 ? 's' : ''}.`);
+        }
     }
 
     const ok = user && user.isActive && (await bcrypt.compare(String(password), user.passwordHash));
     if (!ok) {
         if (user) {
-            // Atomic counter, so parallel guesses are all counted
-            const updated = await User.findOneAndUpdate(
-                { _id: user._id },
-                { $inc: { failedLogins: 1 } },
-                { returnDocument: 'after' }
+            const lockAt = new Date(Date.now() + LOCK_MINUTES * 60000);
+            // Atomic counters, so parallel guesses are all counted
+            const guard = await LoginGuard.findOneAndUpdate(
+                { userId: user._id, client },
+                { $inc: { failed: 1 }, $set: { expireAt: lockAt } },
+                { upsert: true, returnDocument: 'after' }
             );
-            if (updated.failedLogins >= MAX_FAILED_LOGINS) {
-                await User.updateOne(
-                    { _id: user._id },
-                    { $set: { failedLogins: 0, lockUntil: new Date(Date.now() + LOCK_MINUTES * 60000) } }
-                );
+            // all devices together, counted over a rolling 15 minutes (the row expires with the window)
+            const account = await LoginGuard.findOneAndUpdate(
+                { userId: user._id, client: '*' },
+                { $inc: { failed: 1 }, $set: { expireAt: lockAt } },
+                { upsert: true, returnDocument: 'after' }
+            );
+            if (account.failed >= MAX_ACCOUNT_FAILS) {
+                await User.updateOne({ _id: user._id }, { $set: { lockUntil: lockAt } });
+                await LoginGuard.deleteOne({ _id: account._id });
                 audit.record({
                     actor: null,
                     action: 'ACCOUNT_LOCKED',
                     targetType: 'User',
                     targetId: user._id,
-                    summary: `Account ${user.name} locked for ${LOCK_MINUTES} min after ${MAX_FAILED_LOGINS} wrong passwords`,
+                    summary: `Account ${user.name} paused for ${LOCK_MINUTES} min after ${MAX_ACCOUNT_FAILS} wrong passwords from several devices`,
                 });
-                throw new HttpError(429, `Too many wrong attempts. This account is locked for ${LOCK_MINUTES} minutes.`);
+                throw new HttpError(429, `Too many wrong attempts on this account. Try again in ${LOCK_MINUTES} minutes, or visit a help desk.`);
+            }
+            if (guard.failed >= MAX_FAILED_LOGINS) {
+                await LoginGuard.updateOne({ _id: guard._id }, { $set: { failed: 0, lockUntil: lockAt, expireAt: lockAt } });
+                throw new HttpError(429, `Too many wrong attempts from this device. Try again in ${LOCK_MINUTES} minutes.`);
             }
         }
         // Same message for unknown user and wrong password, so attackers cannot probe accounts
         throw unauthorized('Invalid mobile number or password');
     }
+    await LoginGuard.deleteMany({ userId: user._id, client: { $in: [client, '*'] } });
 
     if (user.failedLogins || user.lockUntil) {
-        await User.updateOne({ _id: user._id }, { $set: { failedLogins: 0 }, $unset: { lockUntil: 1 } });
+        await User.updateOne({ _id: user._id }, { $unset: { failedLogins: 1, lockUntil: 1 } });
     }
     return { token: signToken(user), user: user.toPublic() };
 };
@@ -253,4 +289,5 @@ const changePassword = async (actor, { currentPassword, newPassword }) => {
     return { message: 'Password changed. Other devices have been logged out.', token: signToken(user), user: user.toPublic() };
 };
 
-module.exports = { requestOtp, register, login, me, createStaff, logoutAll, updateProfile, changePassword, ageOn, MIN_AGE, SALT_ROUNDS, phoneQuery, cleanPhoneOrThrow };
+module.exports = {
+    LoginGuard, requestOtp, register, login, me, createStaff, logoutAll, updateProfile, changePassword, ageOn, MIN_AGE, SALT_ROUNDS, phoneQuery, cleanPhoneOrThrow };

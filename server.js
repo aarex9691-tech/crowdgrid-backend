@@ -130,7 +130,7 @@ if (require.main === module) {
         server.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT} (live updates on)`));
         // Every 5 minutes: expire unpaid orders, recover payments interrupted by a crash
         const { sweep } = require('./modules/order/order.service');
-        const tick = () => sweep().then((r) => (r.expired || r.unstuck || r.finished) && console.log(`[orders] expired ${r.expired}, recovered ${r.unstuck}, finished ${r.finished}`)).catch((e) => console.warn(`[orders] sweep failed: ${e.message}`));
+        const tick = () => sweep().then((r) => (r.expired || r.unstuck || r.finished || r.refunds) && console.log(`[orders] expired ${r.expired}, recovered ${r.unstuck}, finished ${r.finished}, refunds sent ${r.refunds}`)).catch((e) => console.warn(`[orders] sweep failed: ${e.message}`));
         tick();
         setInterval(tick, 5 * 60000).unref();
     });

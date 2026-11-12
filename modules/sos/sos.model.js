@@ -26,6 +26,7 @@ const sosSchema = new mongoose.Schema(
 
 sosSchema.index({ status: 1, createdAt: -1 });
 sosSchema.index({ createdAt: -1 });
+sosSchema.index({ userId: 1, createdAt: -1 }); // a person's own alerts, and the per-person alert limit
 
 module.exports = mongoose.model('SosIncident', sosSchema);
 module.exports.SOS_TYPES = SOS_TYPES;

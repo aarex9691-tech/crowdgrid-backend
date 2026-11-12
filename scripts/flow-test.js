@@ -699,7 +699,7 @@ async function main() {
             for (const bk of myBookings) await lodging.cancel(bk._id, { ...me });
             const mealPasses = await Pass.find({ userId: me._id, type: 'MEAL' }).lean();
             for (const p of mealPasses) await FoodSlot.updateOne({ _id: p.refId }, { $inc: { remaining: p.details?.people || 1 } });
-            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id }), require('../modules/lostfound/photo.model').Photo.deleteMany({ uploadedBy: me._id })]);
+            await Promise.all([Pass.deleteMany({ userId: me._id }), Order.deleteMany({ userId: me._id }), LodgingBooking.deleteMany({ userId: me._id }), require('../modules/lodging/personNights').PersonNight.deleteMany({ userId: me._id }), auth.LoginGuard.deleteMany({ userId: me._id }), require('../modules/lostfound/lostfound.model').deleteMany({ reportedBy: me._id }), require('../modules/lostfound/photo.model').Photo.deleteMany({ uploadedBy: me._id })]);
             await require('../modules/auth/avatar').Avatar.deleteMany({ userId: me._id });
             await User.deleteOne({ _id: me._id });
         }

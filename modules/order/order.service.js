@@ -29,7 +29,7 @@ const priceItem = async (raw, user) => {
             guestNames: Array.isArray(raw.input?.guestNames) ? raw.input.guestNames.map((n) => String(n).slice(0, 60)).slice(0, 5) : [], // one name per bed, up to 5
             ...(Array.isArray(raw.input?.bedNos) ? { bedNos: raw.input.bedNos.slice(0, 5).map(Number) } : {}), // beds chosen on the map
         };
-        const q = await lodging.quote(refId, input, { requireNames: true });
+        const q = await lodging.quote(refId, input, { requireNames: true, user });
         return { kind, refId, input: { ...input, ...q.stay }, label: q.label, detail: q.detail, amount: q.amount };
     }
     if (kind === 'TRANSIT') {
@@ -223,7 +223,22 @@ const sweep = async (now = new Date()) => {
             console.error(`[orders] could not finish paid order ${order._id}: ${e.message}`);
         }
     }
-    return { expired: expired.modifiedCount, unstuck: stuck.modifiedCount, finished };
+    // Refunds the gateway refused earlier: orders (items that could not be issued) and cancelled passes
+    let refunds = 0;
+    for (const order of await Order.find({ status: 'PAID', 'payment.refundPending': true }).limit(20)) {
+        try {
+            const r = await gateway().refund({ amount: order.refunded, reference: order.payment.reference, idempotencyKey: `order-refund:${order._id}` });
+            const marked = await Order.updateOne(
+                { _id: order._id, 'payment.refundPending': true },
+                { $set: { 'payment.refundReference': r.reference }, $unset: { 'payment.refundPending': 1, 'payment.lastError': 1 } }
+            );
+            refunds += marked.modifiedCount;
+        } catch (e) {
+            console.error(`[refunds] order ${order._id}: retry failed: ${e.message}`);
+        }
+    }
+    refunds += await require('../pass/cancel.service').retryPassRefunds();
+    return { expired: expired.modifiedCount, unstuck: stuck.modifiedCount, finished, refunds };
 };
 
 module.exports = { create, pay, get, mine, cancel, sweep, ORDER_TTL_MIN, STUCK_PAYMENT_MIN };

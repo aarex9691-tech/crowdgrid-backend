@@ -101,6 +101,34 @@ const release = async (pass, user) => {
 };
 
 /** Cancels the pass, frees the place and refunds by the policy. */
+/**
+ * Sends the refund recorded on a cancelled pass, once: the reference is written in the same
+ * update that clears "pending", and only a pass without a reference is ever sent again.
+ */
+const sendPassRefund = async (passId) => {
+    const pass = await Pass.findById(passId).lean();
+    if (!pass || !(pass.refund?.amount > 0) || pass.refund.reference) return false;
+    const orderId = pass.details?.orderId && mongoose.isValidObjectId(pass.details.orderId) ? pass.details.orderId : null;
+    const order = orderId ? await Order.findById(orderId, 'payment.reference').lean() : null;
+    const r = await gateway().refund({ amount: pass.refund.amount, reference: order?.payment?.reference, idempotencyKey: `pass-refund:${pass._id}` });
+    const marked = await Pass.updateOne({ _id: pass._id, 'refund.reference': { $exists: false } }, { $set: { 'refund.reference': r.reference }, $unset: { 'refund.pending': 1 } });
+    if (marked.modifiedCount && orderId) await Order.updateOne({ _id: orderId }, { $inc: { refunded: pass.refund.amount } });
+    return true;
+};
+
+/** Retries refunds the gateway refused earlier (called by the order sweep). */
+const retryPassRefunds = async () => {
+    let sent = 0;
+    for (const p of await Pass.find({ 'refund.pending': true }, '_id').limit(50).lean()) {
+        try {
+            if (await sendPassRefund(p._id)) sent += 1;
+        } catch (e) {
+            console.error(`[refunds] pass ${p._id}: retry failed: ${e.message}`);
+        }
+    }
+    return sent;
+};
+
 const cancel = async (passId, user, now = new Date()) => {
     const q = await quote(passId, user, now);
     if (!q.cancellable) throw badRequest(q.reason);
@@ -124,11 +152,13 @@ const cancel = async (passId, user, now = new Date()) => {
     }
 
     if (q.refund > 0) {
-        const orderId = pass.details?.orderId && mongoose.isValidObjectId(pass.details.orderId) ? pass.details.orderId : null;
-        const order = orderId ? await Order.findById(orderId, 'payment.reference').lean() : null;
-        const r = await gateway().refund({ amount: q.refund, reference: order?.payment?.reference });
-        await Pass.updateOne({ _id: pass._id }, { $set: { 'refund.reference': r.reference } });
-        if (orderId) await Order.updateOne({ _id: orderId }, { $inc: { refunded: q.refund } });
+        // The cancellation already stands; if the gateway fails, the refund is queued and retried by the order sweep
+        try {
+            await sendPassRefund(pass._id);
+        } catch (err) {
+            await Pass.updateOne({ _id: pass._id }, { $set: { 'refund.pending': true } });
+            console.error(`[refunds] pass ${pass._id}: refund of ₹${q.refund} queued after a gateway error: ${err.message}`);
+        }
     }
     const done = await Pass.findById(pass._id).lean();
 
@@ -149,4 +179,4 @@ const cancel = async (passId, user, now = new Date()) => {
     return { message, refund: q.refund, percent: q.percent, pass: toClient(done) };
 };
 
-module.exports = { quote, cancel, refundFor, startOf, POLICY, CANCELLABLE };
+module.exports = { quote, cancel, refundFor, startOf, retryPassRefunds, POLICY, CANCELLABLE };

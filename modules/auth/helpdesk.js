@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const User = require('./user.model');
 const audit = require('../audit/audit.service');
 const { ROLES } = require('../../config/roles');
-const { SALT_ROUNDS, phoneQuery, cleanPhoneOrThrow } = require('./auth.service');
+const { SALT_ROUNDS, phoneQuery, cleanPhoneOrThrow, LoginGuard } = require('./auth.service');
 const { badRequest, forbidden, notFound } = require('../../utils/httpError');
 
 /**
@@ -64,6 +64,7 @@ const reset = async (actor, userId) => {
     u.failedLogins = undefined;
     u.lockUntil = undefined;
     await u.save();
+    await LoginGuard.deleteMany({ userId: u._id }); // device pauses too, so the temporary password works at once
     await audit.record({
         actor,
         action: 'PASSWORD_RESET_BY_STAFF',

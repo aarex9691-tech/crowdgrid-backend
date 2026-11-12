@@ -35,7 +35,7 @@ const passSchema = new mongoose.Schema(
 
         // Set when the holder cancels: how much of what they paid comes back
         cancelledAt: Date,
-        refund: { amount: Number, percent: Number, reference: String },
+        refund: { amount: Number, percent: Number, reference: String, pending: Boolean }, // pending: the gateway failed; the order sweep retries it
     },
     { timestamps: true }
 );

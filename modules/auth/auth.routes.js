@@ -29,7 +29,8 @@ router.post('/register', authLimiter, async (req, res) => {
 });
 
 router.post('/login', authLimiter, async (req, res) => {
-    res.json(await auth.login(req.body || {}));
+    // ip (Render's proxy is trusted) lets a lockout pause only the device that guessed wrong
+    res.json(await auth.login({ ...(req.body || {}), ip: req.ip }));
 });
 
 router.get('/me', requireAuth, async (req, res) => {

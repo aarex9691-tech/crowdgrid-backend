@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const SosIncident = require('./sos.model');
 const { ROLES } = require('../../config/roles');
 const audit = require('../audit/audit.service');
-const { badRequest, notFound, forbidden } = require('../../utils/httpError');
+const { HttpError, badRequest, notFound, forbidden } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 
 const MAX_HISTORY = 50;
@@ -28,6 +28,9 @@ const cleanMessage = (message) => {
     return m || undefined;
 };
 
+const MAX_SOS_PER_WINDOW = 5;
+const SOS_WINDOW_MIN = 10;
+
 const raise = async (user, { eventId, lat, lng, accuracy, type: rawType, message: rawMessage } = {}) => {
     const type = cleanType(rawType);
     const message = cleanMessage(rawMessage);
@@ -52,6 +55,13 @@ const raise = async (user, { eventId, lat, lng, accuracy, type: rawType, message
         await recent.save();
         realtime.notify(['control', 'volunteers'], 'sos', { action: 'location', id: String(recent._id) });
         return { incident: recent.toObject(), updated: true };
+    }
+
+    // A real emergency stays one open alert (updated above). Opening and closing alerts in a loop would
+    // flood the control room, so new alerts are capped per person; the message points to 112 instead.
+    const lastTen = await SosIncident.countDocuments({ userId: user._id, createdAt: { $gte: new Date(Date.now() - SOS_WINDOW_MIN * 60000) } });
+    if (lastTen >= MAX_SOS_PER_WINDOW) {
+        throw new HttpError(429, `You have sent ${lastTen} alerts in ${SOS_WINDOW_MIN} minutes, so new ones are paused for a few minutes. If you are in danger, call 112 now.`);
     }
 
     const incident = await SosIncident.create({
