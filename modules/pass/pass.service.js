@@ -46,6 +46,7 @@ const summary = (pass) => ({
 });
 
 const { photoUrlFor } = require('../auth/avatar');
+const Event = require('../event/event.model');
 
 const maskPhone = (phone) => (phone ? `${'*'.repeat(6)}${String(phone).slice(-4)}` : undefined);
 
@@ -83,13 +84,37 @@ const scanPass = async (qr, scanner, opts = {}) => {
     return redeem(pass, scanner);
 };
 
+/** Events this corporate admin organises (their desk may only check badges for these). */
+const ownEventIds = async (scanner) => (await Event.find({ organizerId: scanner._id }).select('_id').lean()).map((e) => String(e._id));
+
+/**
+ * Who may redeem which pass:
+ *  - NGO admins, and volunteers who serve an NGO, only passes of that NGO's camps and kitchens;
+ *  - corporate admins only badges for their own events (never a pilgrim's meal, stay or bus pass);
+ *  - the control room and general volunteers, any pass.
+ * Returns a REJECTED result, or null when the scanner may redeem it.
+ */
+const scopeError = async (pass, scanner) => {
+    const servesNgo = scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId);
+    if (servesNgo && pass.providerId && String(pass.providerId) !== String(scanner.providerId)) {
+        return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
+    }
+    if (scanner.role === ROLES.CORPORATE_ADMIN) {
+        if (pass.type !== 'CORPORATE') {
+            return { result: 'REJECTED', reason: 'WRONG_SERVICE', message: 'This desk checks event badges only. Send them to the right counter.', pass: summary(pass) };
+        }
+        if (!(await ownEventIds(scanner)).includes(String(pass.eventId))) {
+            return { result: 'REJECTED', reason: 'WRONG_EVENT', message: 'This badge is for another organiser\'s event', pass: summary(pass) };
+        }
+    }
+    return null;
+};
+
 /** Checks scope and validity, then redeems the pass atomically (single use). */
 const redeem = async (pass, scanner) => {
     const now = new Date();
-    // NGO admins may only redeem passes for their own camps / kitchens
-    if (scanner.role === ROLES.NGO_ADMIN && pass.providerId && String(pass.providerId) !== String(scanner.providerId)) {
-        return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
-    }
+    const outOfScope = await scopeError(pass, scanner);
+    if (outOfScope) return outOfScope;
 
     if (pass.status === 'CANCELLED') return { result: 'REJECTED', reason: 'CANCELLED', message: `This pass was cancelled on ${fmt(pass.updatedAt)}. Do not let them in.`, pass: summary(pass) };
     if (now < pass.validFrom) return { result: 'REJECTED', reason: 'NOT_YET_VALID', message: `Not valid until ${fmt(pass.validFrom)}`, pass: summary(pass) };
@@ -173,9 +198,12 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     const filter = { userId: holder._id, status: 'ACTIVE', validFrom: { $lte: now }, validUntil: { $gte: now } };
     const types = SERVICE_TYPES[String(service).toUpperCase()] ?? null;
     if (types) filter.type = { $in: types };
-    if (scanner.role === ROLES.CORPORATE_ADMIN) filter.type = { $in: ['CORPORATE'] };
-    // NGO admins only redeem passes for their own camps / kitchens (or passes with no provider)
-    if (scanner.role === ROLES.NGO_ADMIN) {
+    if (scanner.role === ROLES.CORPORATE_ADMIN) {
+        filter.type = { $in: ['CORPORATE'] };
+        filter.eventId = { $in: await ownEventIds(scanner) };
+    }
+    // NGO admins and NGO volunteers only redeem passes for their own camps / kitchens (or passes with no provider)
+    if (scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId)) {
         filter.$or = [{ providerId: scanner.providerId || null }, { providerId: null }, { providerId: { $exists: false } }];
     }
     let candidates = await Pass.find(filter).sort({ validUntil: 1 }).populate('userId', 'name countryCode phone photoKey').lean();

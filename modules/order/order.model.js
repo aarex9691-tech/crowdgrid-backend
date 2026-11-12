@@ -38,6 +38,8 @@ const orderSchema = new mongoose.Schema(
             reference: String,
             paidAt: Date,
             lastError: String,
+            refundReference: String, // gateway reference of the refund for items that could not be issued
+            refundPending: Boolean, // the refund call failed; staff or a retry must send it
         },
         refunded: { type: Number, default: 0 }, // items that could not be issued after payment
         expiresAt: Date, // unpaid orders lapse after ORDER_TTL_MIN (order.service.js)

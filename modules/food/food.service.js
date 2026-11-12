@@ -65,6 +65,8 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
     const slot = await FoodSlot.findById(slotId).lean();
     if (!slot) throw notFound('Meal slot not found');
     const center = await FoodCenter.findById(slot.foodCenterId).lean();
+    // Checked before any plate is taken: a closed or removed kitchen hands out nothing
+    if (!center || center.isActive === false) throw notFound('This kitchen is closed. Choose another kitchen.');
     const { from, until } = windowFor(slot);
     if (new Date() > until) throw badRequest(`The ${MEALS[slot.meal].label.toLowerCase()} window is over`);
 

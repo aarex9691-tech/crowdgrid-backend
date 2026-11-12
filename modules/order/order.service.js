@@ -94,7 +94,19 @@ const fulfil = async (order, user) => {
             order.refunded += item.amount;
         }
     }
-    if (order.refunded > 0) await gateway().refund({ amount: order.refunded, reference: order.payment.reference });
+    if (order.refunded > 0) {
+        // The money must go back, but a gateway error here must not undo the payment record:
+        // the order stays PAID and the refund is marked pending, so it can be retried and is never charged again.
+        try {
+            const r = await gateway().refund({ amount: order.refunded, reference: order.payment.reference });
+            order.payment.refundReference = r.reference;
+            order.payment.refundPending = undefined;
+        } catch (err) {
+            order.payment.refundPending = true;
+            order.payment.lastError = `Refund of ₹${order.refunded} not sent yet: ${err.message}`;
+            console.error(`[orders] refund failed for order ${order._id}: ${err.message}`);
+        }
+    }
 };
 
 /**
@@ -138,10 +150,16 @@ const pay = async (orderId, user, body = {}) => {
         throw new HttpError(402, result.message);
     }
 
+    // Save "PAID" the moment the charge succeeds, before issuing passes: if anything after this fails,
+    // the order can never drop back to unpaid (the 5-minute sweep only resets orders without paidAt).
     locked.status = 'PAID';
     locked.payment = { provider: locked.total === 0 ? 'NONE' : gateway().name, method, account: result.account, reference: result.reference, paidAt: new Date() };
-    await fulfil(locked, user);
-    await locked.save();
+    await Order.updateOne({ _id: locked._id }, { $set: { status: 'PAID', payment: locked.payment } });
+    try {
+        await fulfil(locked, user);
+    } finally {
+        await locked.save(); // item results and any refund, even if fulfilment stopped part-way
+    }
 
     audit.record({
         actor: user,

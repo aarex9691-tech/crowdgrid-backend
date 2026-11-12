@@ -53,7 +53,8 @@ const PERMISSIONS = Object.freeze({
 
     // SOS: anyone in trouble can raise one; staff see them according to scope
     'sos:create': ALL,
-    'sos:view': STAFF,
+    // Alerts carry names, phone numbers and live locations: only the control room and volunteers list them
+    'sos:view': [SUPER_ADMIN, AUTHORITY, VOLUNTEER],
     'sos:manage': [SUPER_ADMIN, AUTHORITY, VOLUNTEER],
 
     // Missing / found person reports

@@ -191,8 +191,9 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
     const where = bedAlloc.describe(lodging, bedNumbers);
 
     // 3. Write booking + pass together; give the nights and beds back if this fails
+    let result;
     try {
-        const result = await withTransaction(async (session) => {
+        result = await withTransaction(async (session) => {
             const [booking] = await LodgingBooking.create(
                 [{ _id: bookingId, lodgingId: lodging._id, eventId: lodging.eventId, userId: user._id, beds: count, guestNames: names, bedNos: bedNumbers, bedLabel: where.text, checkIn: stay.checkIn, checkOut: stay.checkOut, nights: dates }],
                 { session }
@@ -229,15 +230,26 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
             await booking.save({ session });
             return { message: `Booking confirmed: ${where.text}`, booking: booking.toObject(), pass: toClient(pass) };
         });
-        const [after] = await nightsLib.attachAvailability([{ ...lodging }], stay);
-        result.availableBeds = after.availableBeds;
-        bedsChanged(lodging._id, lodging.providerId._id); // after commit, so screens re-read the new count
-        return result;
     } catch (err) {
-        await bedAlloc.release(bookingId);
-        await nightsLib.releaseNights(lodging._id, dates, count);
+        // Only failures BEFORE the booking is saved give the beds back. Each step is guarded on its own,
+        // so a failing release is logged and the original error still reaches the pilgrim.
+        await bedAlloc.release(bookingId).catch((e) => console.error(`[lodging] could not release beds of ${bookingId}: ${e.message}`));
+        await nightsLib.releaseNights(lodging._id, dates, count).catch((e) => console.error(`[lodging] could not release nights of ${lodging._id} (${dates.join(', ')}): ${e.message}`));
         throw err;
     }
+    // The booking is confirmed from here on: these steps are best effort and never undo it
+    try {
+        const [after] = await nightsLib.attachAvailability([{ ...lodging }], stay);
+        result.availableBeds = after.availableBeds;
+    } catch (e) {
+        console.warn(`[lodging] booked, but could not re-read availability: ${e.message}`);
+    }
+    try {
+        bedsChanged(lodging._id, lodging.providerId._id); // after commit, so screens re-read the new count
+    } catch (e) {
+        console.warn(`[lodging] booked, but the live update failed: ${e.message}`);
+    }
+    return result;
 };
 
 /** Cancel a booking: flips status atomically, gives every night and bed back, voids the pass. */
