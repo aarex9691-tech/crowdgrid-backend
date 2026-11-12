@@ -41,7 +41,8 @@ const orderSchema = new mongoose.Schema(
             refundReference: String, // gateway reference of the refund for items that could not be issued
             refundPending: Boolean, // the refund call failed; staff or a retry must send it
             refundPendingAmount: Number, // how much of `refunded` is still owed (pass cancellations refund themselves)
-            refundLeaseUntil: Date, // one retry at a time: set while a refund call is in flight
+            refundLeaseUntil: Date,
+            refundKey: String, // idempotency key of the owed refund: the same on every retry, new when the amount changes // one retry at a time: set while a refund call is in flight
         },
         refunded: { type: Number, default: 0 }, // items that could not be issued after payment
         expiresAt: Date, // unpaid orders lapse after ORDER_TTL_MIN (order.service.js)

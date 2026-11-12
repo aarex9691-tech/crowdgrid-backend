@@ -99,14 +99,17 @@ const fulfil = async (order, user) => {
         }
     }
     if (due > 0) {
+        // One key per owed amount, reused on every retry so a real gateway can spot a repeat
+        const key = `order-refund:${order._id}:${new mongoose.Types.ObjectId()}`;
         // The money must go back, but a gateway error here must not undo the payment record:
         // the order stays PAID and the refund is marked pending, so it can be retried and is never charged again.
         try {
-            const r = await gateway().refund({ amount: due, reference: order.payment.reference, idempotencyKey: `order-refund:${order._id}:${order.refunded}` });
+            const r = await gateway().refund({ amount: due, reference: order.payment.reference, idempotencyKey: key });
             order.payment.refundReference = r.reference;
         } catch (err) {
             order.payment.refundPending = true;
             order.payment.refundPendingAmount = (order.payment.refundPendingAmount || 0) + due;
+            order.payment.refundKey = key; // a bigger owed amount is a new refund, so it gets the new key
             order.payment.lastError = `Refund of ₹${order.payment.refundPendingAmount} not sent yet: ${err.message}`;
             console.error(`[orders] refund failed for order ${order._id}: ${err.message}`);
         }
@@ -239,10 +242,10 @@ const sweep = async (now = new Date()) => {
         // Older records have no owed amount stored: everything refunded on the order was this refund
         const amount = order.payment.refundPendingAmount ?? order.refunded;
         try {
-            const r = await gateway().refund({ amount, reference: order.payment.reference, idempotencyKey: `order-refund:${order._id}:${order.refunded}` });
+            const r = await gateway().refund({ amount, reference: order.payment.reference, idempotencyKey: order.payment.refundKey || `order-refund:${order._id}` });
             const marked = await Order.updateOne(
                 { _id, 'payment.refundPending': true },
-                { $set: { 'payment.refundReference': r.reference }, $unset: { 'payment.refundPending': 1, 'payment.refundPendingAmount': 1, 'payment.refundLeaseUntil': 1, 'payment.lastError': 1 } }
+                { $set: { 'payment.refundReference': r.reference }, $unset: { 'payment.refundPending': 1, 'payment.refundPendingAmount': 1, 'payment.refundLeaseUntil': 1, 'payment.refundKey': 1, 'payment.lastError': 1 } }
             );
             refunds += marked.modifiedCount;
         } catch (e) {

@@ -141,10 +141,13 @@ const login = async ({ phone, email, identifier, countryCode, password, ip }) =>
                 { upsert: true, returnDocument: 'after' }
             );
             // all devices together, counted over a rolling 15 minutes (the row expires with the window)
+            // A fixed 15-minute window from the first failure. A row whose window is over (but not yet removed
+            // by the TTL cleanup, which can lag a minute) starts a new window instead of adding to the old count.
+            const live = { $gt: ['$expireAt', new Date()] };
             const account = await LoginGuard.findOneAndUpdate(
                 { userId: user._id, client: '*' },
-                { $inc: { failed: 1 }, $setOnInsert: { expireAt: lockAt } }, // a fixed window from the first failure
-                { upsert: true, returnDocument: 'after' }
+                [{ $set: { failed: { $cond: [live, { $add: [{ $ifNull: ['$failed', 0] }, 1] }, 1] }, expireAt: { $cond: [live, '$expireAt', lockAt] } } }],
+                { upsert: true, returnDocument: 'after', updatePipeline: true }
             );
             if (account.failed >= MAX_ACCOUNT_FAILS) {
                 await User.updateOne({ _id: user._id }, { $set: { lockUntil: lockAt } });
