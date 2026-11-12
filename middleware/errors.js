@@ -23,6 +23,10 @@ const errorHandler = (err, req, res, next) => {
     if (err.name === 'MulterError') {
         return res.status(400).json({ message: err.message });
     }
+    // Problems with the request itself, found by the body parser before any route runs
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ message: 'The request body is not valid JSON' });
+    if (err.type === 'entity.too.large') return res.status(413).json({ message: 'The request is too large' });
+    if (err.expose && err.status >= 400 && err.status < 500) return res.status(err.status).json({ message: err.message });
     // The link to MongoDB Atlas dropped (unstable Wi-Fi, VPN, antivirus HTTPS scanning...).
     // Say so plainly instead of a generic 500; the next request usually works.
     if (/^Mongo(Network|ServerSelection|NetworkTimeout|PoolCleared)Error$/.test(err.name) || ['ECONNRESET', 'ETIMEDOUT', 'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC'].includes(err.code || err.cause?.code)) {
