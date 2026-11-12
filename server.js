@@ -42,6 +42,8 @@ const isAllowedOrigin = (origin) => {
 };
 
 const app = express();
+// Render sits one proxy hop in front: trust it so req.ip is the pilgrim's address and each person gets their own rate limit
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(
