@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { FoodCenter, FoodSlot, MEALS } = require('./food.model');
 const Provider = require('../provider/provider.model');
+const Event = require('../event/event.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
@@ -65,6 +66,8 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
     const slot = await FoodSlot.findById(slotId).lean();
     if (!slot) throw notFound('Meal slot not found');
     const center = await FoodCenter.findById(slot.foodCenterId).lean();
+    const ev = await Event.findById(slot.eventId, 'startDate').lean();
+    const prebooked = !!ev?.startDate && istDate() < istDate(ev.startDate); // taken before the yatra starts
     // Checked before any plate is taken: a closed or removed kitchen hands out nothing
     if (!center || center.isActive === false) throw notFound('This kitchen is closed. Choose another kitchen.');
     const { from, until } = windowFor(slot);
@@ -102,7 +105,7 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
                 refId: slot._id,
                 title: `${MEALS[slot.meal].label}${count > 1 ? ` x ${count}` : ''} - ${center.name}`,
                 subtitle: `${humanDate(slot.date)}, ${slot.startTime} to ${slot.endTime}${count > 1 ? ` - ${count} people` : ''}`,
-                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu, diet: center.diet, people: count, guests, ...(center.routeNode ? { routeNode: center.routeNode } : {}) },
+                details: { kitchen: center.name, sector: center.sector, meal: slot.meal, date: slot.date, menu, diet: center.diet, people: count, guests, ...(prebooked ? { prebooked: true } : {}), ...(center.routeNode ? { routeNode: center.routeNode } : {}) },
                 validFrom: from,
                 validUntil: until,
                 dedupeKey,

@@ -241,6 +241,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
                         nights: dates.length,
                         provider: lodging.providerId.name,
                         ...(lodging.routeNode ? { routeNode: lodging.routeNode } : {}),
+                        ...(istDate() < istDate(event.startDate) ? { prebooked: true } : {}), // booked before the yatra starts
                         ...(paidByOrder ? { paid: paidByOrder.amount, orderId: String(paidByOrder._id) } : {}),
                     },
                     validFrom: istDateTime(stay.checkIn, '00:00'),

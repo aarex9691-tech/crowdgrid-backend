@@ -34,8 +34,8 @@ const priceItem = async (raw, user, inCart = null) => {
     }
     if (kind === 'TRANSIT') {
         const people = groupSize(raw.input?.people, 'people on one bus pass');
-        const q = await transit.quote(refId, people);
-        return { kind, refId, input: { people }, label: q.label, detail: q.detail, amount: q.amount };
+        const q = await transit.quote(refId, people, raw.input?.date ? String(raw.input.date) : undefined);
+        return { kind, refId, input: { people, date: q.day }, label: q.label, detail: q.detail, amount: q.amount };
     }
     if (kind === 'EVENT') {
         const people = groupSize(raw.input?.people, 'tickets');
@@ -87,7 +87,7 @@ const fulfil = async (order, user) => {
                     ? await lodging.book(item.refId, user, item.input || {}, { paidByOrder })
                     : item.kind === 'EVENT'
                       ? await events.register(item.refId, user, { paidByOrder, people: item.input?.people })
-                      : await transit.boardingPass(item.refId, user, { paidByOrder, people: item.input?.people });
+                      : await transit.boardingPass(item.refId, user, { paidByOrder, people: item.input?.people, date: item.input?.date });
             if (res.existing) throw new Error('You already had a pass for this today');
             item.status = 'ISSUED';
             item.passId = res.pass._id;
