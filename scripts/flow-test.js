@@ -600,6 +600,39 @@ async function main() {
         const wariCamp = await Lodging.findOne({ eventId: wariEv._id, pricePerNight: 0 }).lean();
         const wariBook = await lodging.book(wariCamp._id, user, { beds: 2 });
         check('A Wari camp can be booked (from the yatra start date)', wariBook.booking?.checkIn >= '2027-06-25', `${wariCamp.name}, check-in ${wariBook.booking?.checkIn}`);
+        {
+            // ---- 12b. Pre-booking before a yatra starts ----
+            const { addDays } = require('../utils/time');
+            const wariStart = istDate(wariEv.startDate);
+            const day3 = addDays(wariStart, 2);
+            check('A camp booked before the yatra starts is marked as pre-booked', wariBook.pass.details?.prebooked === true, JSON.stringify(wariBook.pass.details?.prebooked));
+            const wariBus = await TransitRoute.findOne({ eventId: wariEv._id, kind: 'SHUTTLE', isActive: true, fare: 0 }).lean();
+            const wariList = await transit.list(String(wariEv._id), { date: day3 });
+            const listed = wariList.find((r) => String(r._id) === String(wariBus._id));
+            check('Bus seats can be checked for a chosen day of a yatra that has not started', listed?.travelDay === day3, listed?.travelDay);
+            const pre = await transit.boardingPass(wariBus._id, user, { people: 2, date: day3 }).catch((e) => e);
+            check('A bus pass can be pre-booked for a chosen day (not only day 1)', pre.pass?.details?.date === day3 && pre.pass?.details?.prebooked === true, pre.message);
+            await expectError('A bus pass cannot be pre-booked for a day after the yatra', () => transit.boardingPass(wariBus._id, user, { date: addDays(istDate(wariEv.endDate), 1) }), 400, /day of the yatra/i);
+            await expectError('A bus pass cannot be booked for a day that has passed', () => transit.boardingPass(wariBus._id, user, { date: addDays(istDate(), -1) }), 400, /passed|day of the yatra/i);
+            await expectError('A made-up date is refused', () => transit.quote(wariBus._id, 1, '2027-02-30'), 400);
+            const wariPaid = await TransitRoute.findOne({ eventId: wariEv._id, kind: 'SHUTTLE', isActive: true, fare: { $gt: 0 } }).lean();
+            if (wariPaid) {
+                const preOrder = await orders.create(user, [{ kind: 'TRANSIT', refId: String(wariPaid._id), input: { people: 1, date: day3 } }]);
+                check('The cart keeps the chosen travel day', preOrder.items[0].input?.date === day3 && preOrder.items[0].detail.includes(day3), preOrder.items[0].detail);
+                const paidPre = await orders.pay(preOrder._id, user, { method: 'UPI', upiId: 'flow@okaxis' });
+                const prePass = paidPre.passes?.[0];
+                check('A paid bus pass is issued for the chosen day', prePass?.details?.date === day3 && prePass?.details?.prebooked === true, prePass?.details?.date);
+            } else console.log('SKIP  Paid pre-booked bus pass (no paid Wari shuttle in the seed)');
+            const runningBus = await TransitRoute.findOne({ eventId: event._id, kind: 'SHUTTLE', isActive: true, fare: 0 }).lean();
+            const runningEvent = await Event.findById(event._id, 'startDate').lean();
+            if (istDate(runningEvent.startDate) <= istDate()) {
+                const today2 = await transit.list(String(event._id));
+                check('A yatra that is on does not say pre-booking', today2.find((r) => String(r._id) === String(runningBus._id))?.prebooking !== true);
+            }
+            const wariSlot = await FoodSlot.findOne({ eventId: wariEv._id, date: { $gte: wariStart } }).lean();
+            const preMeal = await food.claim(wariSlot._id, user, { people: 1 }).catch((e) => e);
+            check('A meal token can be pre-booked for a day of the yatra, and is marked so', preMeal.pass?.details?.prebooked === true, preMeal.message);
+        }
         check('Vivekananda Kendra is a verified seva organisation', !!(await Provider.exists({ name: 'Vivekananda Kendra', verificationStatus: 'VERIFIED' })));
 
         // ---- 13. Cancellation and refunds from the passbook ----
