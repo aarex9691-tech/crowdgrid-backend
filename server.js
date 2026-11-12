@@ -42,8 +42,15 @@ const isAllowedOrigin = (origin) => {
 };
 
 const app = express();
-// Render sits one proxy hop in front: trust it so req.ip is the pilgrim's address and each person gets their own rate limit
-app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
+// Render sits one proxy hop in front: trust it there so req.ip is the pilgrim's address and each person gets their
+// own rate limit. Anywhere else (a laptop, no proxy) trust nothing, or a fake X-Forwarded-For header would dodge the limit.
+// Render sets RENDER=true by itself; TRUST_PROXY_HOPS overrides for other hosts.
+const proxyHops = () => {
+    const v = Number(process.env.TRUST_PROXY_HOPS);
+    if (process.env.TRUST_PROXY_HOPS !== undefined && Number.isInteger(v) && v >= 0) return v;
+    return process.env.RENDER ? 1 : 0;
+};
+app.set('trust proxy', proxyHops());
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(
@@ -123,7 +130,7 @@ if (require.main === module) {
         server.listen(PORT, () => console.log(`CrowdGrid API running on http://localhost:${PORT} (live updates on)`));
         // Every 5 minutes: expire unpaid orders, recover payments interrupted by a crash
         const { sweep } = require('./modules/order/order.service');
-        const tick = () => sweep().then((r) => (r.expired || r.unstuck) && console.log(`[orders] expired ${r.expired}, recovered ${r.unstuck}`)).catch((e) => console.warn(`[orders] sweep failed: ${e.message}`));
+        const tick = () => sweep().then((r) => (r.expired || r.unstuck || r.finished) && console.log(`[orders] expired ${r.expired}, recovered ${r.unstuck}, finished ${r.finished}`)).catch((e) => console.warn(`[orders] sweep failed: ${e.message}`));
         tick();
         setInterval(tick, 5 * 60000).unref();
     });

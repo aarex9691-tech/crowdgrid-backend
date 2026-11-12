@@ -221,6 +221,19 @@ async function main() {
             const dupAfter = await Order.findById(dup._id).lean();
             check('A paid order stays paid when its refund fails (it can never be charged twice)', dupAfter.status === 'PAID' && !!dupAfter.payment?.paidAt, dupAfter.status);
             check('The failed refund is recorded so it can be retried', dupAfter.payment?.refundPending === true && dupAfter.refunded === bus.fare);
+
+            // Regression: the server stopped right after saving PAID, before issuing the pass. The sweep finishes it.
+            {
+                const halfDone = await orders.create(user, [{ kind: 'LODGING', refId: String(paidCamp._id), input: { beds: 1, guestNames: ['Kiran Patil'] } }]);
+                await Order.updateOne(
+                    { _id: halfDone._id },
+                    { $set: { status: 'PAID', payment: { provider: 'SIMULATED', method: 'UPI', reference: 'SIMTESTCRASH', paidAt: new Date(Date.now() - 10 * 60000) } } }
+                );
+                const swept2 = await orders.sweep();
+                const finishedOrder = await Order.findById(halfDone._id).lean();
+                check('A paid order left without its pass (server stopped) is finished by the sweep', finishedOrder.items[0].status === 'ISSUED' && !!finishedOrder.items[0].passId && swept2.finished >= 1, finishedOrder.items[0].status);
+                if (finishedOrder.items[0].passId) await require('../modules/pass/cancel.service').cancel(finishedOrder.items[0].passId, user).catch(() => {});
+            }
         }
 
         // ---- 5. Family meal token ----
@@ -237,7 +250,7 @@ async function main() {
             // Regression: a corporate check-in desk must not be able to use up a pilgrim's meal token
             const corpDesk = await User.findOne({ phone: '9000000004' }).lean();
             const corpScan = await passes.scan(m.pass.qr, { ...corpDesk, id: String(corpDesk._id) });
-            check('A corporate desk cannot redeem a pilgrim\'s meal token', corpScan.result === 'REJECTED' && (await Pass.findById(m.pass._id).lean()).status === 'ACTIVE', corpScan.reason);
+            check('A corporate desk cannot redeem a pilgrim\'s meal token', corpScan.result === 'REJECTED' && corpScan.reason === 'WRONG_SERVICE' && (await Pass.findById(m.pass._id).lean()).status === 'ACTIVE', corpScan.reason);
 
             // Regression: a closed kitchen hands out no tokens, and no plate is lost trying
             const other = slots.find((s2) => String(s2._id) !== String(slot._id) && String(s2.foodCenterId) !== String(slot.foodCenterId) && s2.meal !== slot.meal);
@@ -250,6 +263,8 @@ async function main() {
                 } finally {
                     await FoodCenter.updateOne({ _id: other.foodCenterId }, { $set: { isActive: true } });
                 }
+            } else {
+                console.log('SKIP  closed-kitchen check (needs a second kitchen with a different meal open today)');
             }
         } else {
             console.log('SKIP  family meal token (all of today\'s meal windows are over; run before 10 pm)');

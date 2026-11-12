@@ -63,4 +63,5 @@ const eventSchema = new mongoose.Schema(
 
 eventSchema.index({ kind: 1, startDate: 1 });
 
+eventSchema.index({ organizerId: 1 }); // host dashboards and corporate scan desks look events up by organiser
 module.exports = mongoose.model('Event', eventSchema);

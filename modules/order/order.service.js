@@ -13,6 +13,7 @@ const { groupSize } = require('../../utils/limits');
 
 const MAX_ITEMS = 10;
 const ORDER_TTL_MIN = 15; // an unpaid order (and its server-side prices) lapses after this
+const User = require('../auth/user.model');
 const STUCK_PAYMENT_MIN = 5; // a payment still "processing" after this is treated as interrupted
 
 /** Prices one cart line on the server (the browser's price is never trusted). */
@@ -208,7 +209,21 @@ const sweep = async (now = new Date()) => {
         { status: 'PROCESSING', 'payment.paidAt': { $exists: false }, processingAt: { $lte: new Date(now - STUCK_PAYMENT_MIN * 60000) } },
         { $set: { status: 'PENDING', 'payment.lastError': 'The payment was interrupted and not completed. Please try again.' }, $unset: { processingAt: 1 } }
     );
-    return { expired: expired.modifiedCount, unstuck: stuck.modifiedCount };
+    // Paid, but the server stopped before every pass was issued: finish the job (or refund what can no longer be issued)
+    let finished = 0;
+    const unfinished = await Order.find({ status: 'PAID', 'items.status': 'PENDING', 'payment.paidAt': { $lte: new Date(now - STUCK_PAYMENT_MIN * 60000) } }).limit(20);
+    for (const order of unfinished) {
+        try {
+            const owner = await User.findById(order.userId).select('name role countryCode phone providerId').lean();
+            if (!owner) continue;
+            await fulfil(order, { ...owner, id: String(owner._id) });
+            await order.save();
+            finished += 1;
+        } catch (e) {
+            console.error(`[orders] could not finish paid order ${order._id}: ${e.message}`);
+        }
+    }
+    return { expired: expired.modifiedCount, unstuck: stuck.modifiedCount, finished };
 };
 
 module.exports = { create, pay, get, mine, cancel, sweep, ORDER_TTL_MIN, STUCK_PAYMENT_MIN };

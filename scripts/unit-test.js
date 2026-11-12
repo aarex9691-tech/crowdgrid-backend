@@ -452,16 +452,22 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         for (const ok of ['2026-11-12', '2028-02-29', '2026-12-31']) assert.equal(isDateString(ok), true, ok);
     });
 
-    await check('The server trusts one proxy hop (Render), so each pilgrim gets their own rate limit', () => {
+    await check('On Render the server trusts one proxy hop (own rate limit per pilgrim); elsewhere it trusts none', () => {
         // server.js refuses to load without its secrets; placeholders are enough (it does not connect or listen when required)
-        const placeholders = { MONGO_URI: 'mongodb://127.0.0.1:1/unit_test', JWT_SECRET: 'unit-test-only', QR_SECRET: 'unit-test-only' };
+        const placeholders = { MONGO_URI: 'mongodb://127.0.0.1:1/unit_test', JWT_SECRET: 'unit-test-only', QR_SECRET: 'unit-test-only', RENDER: 'true' };
         const missing = Object.keys(placeholders).filter((k) => !process.env[k]);
         for (const k of missing) process.env[k] = placeholders[k];
         try {
+            delete process.env.TRUST_PROXY_HOPS;
             const app = require('../server');
             assert.equal(app.get('trust proxy'), 1);
+            // the same code off Render: trusts nothing
+            delete require.cache[require.resolve('../server')];
+            delete process.env.RENDER;
+            assert.equal(require('../server').get('trust proxy'), 0);
         } finally {
             for (const k of missing) delete process.env[k];
+            delete require.cache[require.resolve('../server')];
         }
     });
 

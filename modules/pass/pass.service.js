@@ -103,7 +103,7 @@ const scopeError = async (pass, scanner) => {
         if (pass.type !== 'CORPORATE') {
             return { result: 'REJECTED', reason: 'WRONG_SERVICE', message: 'This desk checks event badges only. Send them to the right counter.', pass: summary(pass) };
         }
-        if (!(await ownEventIds(scanner)).includes(String(pass.eventId))) {
+        if (!(await Event.exists({ _id: pass.eventId, organizerId: scanner._id }))) {
             return { result: 'REJECTED', reason: 'WRONG_EVENT', message: 'This badge is for another organiser\'s event', pass: summary(pass) };
         }
     }
