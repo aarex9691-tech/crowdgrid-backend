@@ -12,7 +12,7 @@ const User = require('../modules/auth/user.model');
 const Event = require('../modules/event/event.model');
 const { Lodging, LodgingBooking } = require('../modules/lodging/lodging.model');
 const { BedAssignment } = require('../modules/lodging/beds');
-const { FoodSlot } = require('../modules/food/food.model');
+const { FoodSlot, FoodCenter } = require('../modules/food/food.model');
 const { Pass } = require('../modules/pass/pass.model');
 const TransitRoute = require('../modules/transit/transit.model');
 const Order = require('../modules/order/order.model');
@@ -155,6 +155,29 @@ async function main() {
         const paidCamp = camps.find((c) => c.pricePerNight > 0 && c.availableBeds >= 2);
         await expectError('Direct booking of a paid camp asks for payment', () => lodging.book(paidCamp._id, user, { beds: 1 }), 402);
 
+        // Regression: if a step AFTER the booking is saved fails (e.g. the database drops while re-reading
+        // availability), the confirmed booking must keep its beds and its night count.
+        {
+            const nights = require('../modules/lodging/nights');
+            const night2 = require('../utils/time').addDays(five.booking.checkIn, 5);
+            const realAttach = nights.attachAvailability;
+            nights.attachAvailability = async () => {
+                throw new Error('connection reset');
+            };
+            let kept;
+            try {
+                kept = await lodging.book(bigCamp._id, user, { beds: 1, guestNames: ['Kiran Patil'], checkIn: night2, checkOut: night2 });
+            } catch {
+                kept = null;
+            } finally {
+                nights.attachAvailability = realAttach;
+            }
+            const keptBooking = await LodgingBooking.findOne({ userId: me._id, lodgingId: bigCamp._id, checkIn: night2, guestNames: 'Kiran Patil' }).lean();
+            const keptBeds = keptBooking ? await BedAssignment.countDocuments({ bookingId: keptBooking._id }) : 0;
+            check('A confirmed booking keeps its bed when a later step fails', !!keptBooking && keptBooking.status === 'CONFIRMED' && keptBeds === 1, kept ? 'booked' : 'error shown');
+            if (keptBooking) await lodging.cancel(keptBooking._id, user);
+        }
+
         // ---- 4. Order + simulated payment ----
         const bus = await TransitRoute.findOne({ eventId: event._id, fare: { $gt: 0 } }).lean();
         const order = await orders.create(user, [
@@ -178,6 +201,26 @@ async function main() {
             const swept = await orders.sweep();
             check('A payment stuck for 5+ minutes goes back to "unpaid" so it can be retried', (await Order.findById(stuck._id).lean()).status === 'PENDING' && swept.unstuck >= 1);
             await orders.cancel(stuck._id, user);
+
+            // Regression: the charge succeeded but the refund for an item that could not be issued failed.
+            // The order must stay PAID (so it can never be paid again), with the refund recorded as pending.
+            const pg = require('../modules/order/payment').gateway();
+            const realRefund = pg.refund;
+            const dup = await orders.create(user, [{ kind: 'TRANSIT', refId: String(bus._id) }]); // user already holds today's bus pass, so this item fails
+            pg.refund = async () => {
+                throw new Error('gateway unreachable');
+            };
+            try {
+                await orders.pay(dup._id, user, { method: 'UPI', upiId: 'flow@okaxis' });
+            } catch {
+                /* checked below */
+            } finally {
+                pg.refund = realRefund;
+            }
+            await orders.sweep(new Date(Date.now() + 30 * 60000));
+            const dupAfter = await Order.findById(dup._id).lean();
+            check('A paid order stays paid when its refund fails (it can never be charged twice)', dupAfter.status === 'PAID' && !!dupAfter.payment?.paidAt, dupAfter.status);
+            check('The failed refund is recorded so it can be retried', dupAfter.payment?.refundPending === true && dupAfter.refunded === bus.fare);
         }
 
         // ---- 5. Family meal token ----
@@ -190,6 +233,24 @@ async function main() {
             const after = await FoodSlot.findById(slot._id).lean();
             check('One token feeds 4 people and uses 4 plates', m.pass.details.people === 4 && after.remaining === slot.remaining - 4);
             await expectError('A second token for the same meal is refused', () => food.claim(slot._id, user, { people: 1 }), 409);
+
+            // Regression: a corporate check-in desk must not be able to use up a pilgrim's meal token
+            const corpDesk = await User.findOne({ phone: '9000000004' }).lean();
+            const corpScan = await passes.scan(m.pass.qr, { ...corpDesk, id: String(corpDesk._id) });
+            check('A corporate desk cannot redeem a pilgrim\'s meal token', corpScan.result === 'REJECTED' && (await Pass.findById(m.pass._id).lean()).status === 'ACTIVE', corpScan.reason);
+
+            // Regression: a closed kitchen hands out no tokens, and no plate is lost trying
+            const other = slots.find((s2) => String(s2._id) !== String(slot._id) && String(s2.foodCenterId) !== String(slot.foodCenterId) && s2.meal !== slot.meal);
+            if (other) {
+                await FoodCenter.updateOne({ _id: other.foodCenterId }, { $set: { isActive: false } });
+                try {
+                    const before = (await FoodSlot.findById(other._id).lean()).remaining;
+                    await expectError('A closed kitchen hands out no meal tokens', () => food.claim(other._id, user, { people: 1 }), 404, /kitchen/i);
+                    check('No plate is lost when a closed kitchen refuses a token', (await FoodSlot.findById(other._id).lean()).remaining === before);
+                } finally {
+                    await FoodCenter.updateOne({ _id: other.foodCenterId }, { $set: { isActive: true } });
+                }
+            }
         } else {
             console.log('SKIP  family meal token (all of today\'s meal windows are over; run before 10 pm)');
         }
@@ -522,6 +583,7 @@ async function main() {
         const volunteerUser = await User.findOne({ phone: '9000000005' }).lean();
         await expectError('Authority cannot reset a staff account at the help desk', () => helpdesk.reset(deskStaff, volunteerUser._id), 403, /pilgrim/);
         await expectError('Staff cannot reset their own password at the help desk', () => helpdesk.reset(deskStaff, deskUser._id), 403);
+        check('Only the control room and volunteers can list SOS alerts (not NGO or corporate admins)', hasPermission('AUTHORITY', 'sos:view') && hasPermission('VOLUNTEER', 'sos:view') && !hasPermission('NGO_ADMIN', 'sos:view') && !hasPermission('CORPORATE_ADMIN', 'sos:view'));
         check('Only Authority and Super Admin can reset passwords', hasPermission('AUTHORITY', 'account:reset') && hasPermission('SUPER_ADMIN', 'account:reset') && !hasPermission('USER', 'account:reset') && !hasPermission('VOLUNTEER', 'account:reset'));
         const tokenBefore = (await auth.login({ identifier: PHONE, password: 'Crowd@123' })).token;
         const given = await helpdesk.reset(deskStaff, me._id);

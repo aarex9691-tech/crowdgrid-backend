@@ -446,6 +446,17 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.ok(t.isUserQr(qr) && t.isLiveQr(qr) && !t.isLiveQr(t.encodeUser(uid, 'n1')));
     });
 
+    await check('Impossible dates are refused (31 Feb, 31 Apr, month 13), real ones accepted', () => {
+        const { isDateString } = require('../utils/time');
+        for (const bad of ['2026-02-31', '2026-04-31', '2026-13-05', '2026-00-10', '2027-02-29']) assert.equal(isDateString(bad), false, bad);
+        for (const ok of ['2026-11-12', '2028-02-29', '2026-12-31']) assert.equal(isDateString(ok), true, ok);
+    });
+
+    await check('The server trusts one proxy hop (Render), so each pilgrim gets their own rate limit', () => {
+        const app = require('../server');
+        assert.equal(app.get('trust proxy'), 1);
+    });
+
     await check('Health check: connected and answering is ok; down or silent database is reported', async () => {
         const h = require('../utils/health');
         const fake = (readyState, ping) => ({ readyState, db: { admin: () => ({ command: ping }) } });
