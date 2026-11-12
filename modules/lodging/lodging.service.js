@@ -13,6 +13,7 @@ const realtime = require('../../utils/realtime');
 
 const { MAX_PER_ACCOUNT } = require('../../utils/limits');
 const nightsLib = require('./nights');
+const eventWindow = require('../../utils/eventWindow');
 const personNights = require('./personNights');
 const MAX_BEDS_PER_USER = MAX_PER_ACCOUNT; // 5 beds per account on any one night
 
@@ -41,15 +42,18 @@ const search = async (eventId, { sector, category, minBeds, checkIn, checkOut } 
         .map(({ providerId, ...l }) => ({ ...l, provider: providerId }));
 };
 
+/** A stay within the yatra's own days: from day 1 (or today) to the last day, 5 nights at most. */
 const parseStay = (event, checkIn, checkOut) => {
-    const eventStart = istDate(event.startDate);
-    const eventEnd = istDate(event.endDate);
-    const today = istDate();
-    const inDate = isDateString(checkIn) ? checkIn : today > eventStart ? today : eventStart;
-    const outDate = isDateString(checkOut) ? checkOut : inDate;
+    const given = (v) => v !== undefined && v !== null && v !== '';
+    if (given(checkIn) && !isDateString(String(checkIn))) throw badRequest('Choose a valid check-in date');
+    if (given(checkOut) && !isDateString(String(checkOut))) throw badRequest('Choose a valid check-out date');
+    const w = eventWindow.windowOf(event);
+    const inDate = given(checkIn) ? String(checkIn) : w.first;
+    const outDate = given(checkOut) ? String(checkOut) : inDate;
     if (outDate < inDate) throw badRequest('Check-out must be on or after check-in');
-    if (inDate < today) throw badRequest('Check-in cannot be in the past');
-    if (inDate > eventEnd || outDate > eventEnd) throw badRequest(`Stays must end by ${eventEnd}`);
+    if (inDate < w.today) throw badRequest('Check-in cannot be in the past');
+    if (inDate < w.start) throw badRequest(`The yatra starts on ${eventWindow.human(w.start)}. Choose a check-in date from a day of the yatra.`);
+    if (inDate > w.end || outDate > w.end) throw badRequest(`Stays must end by ${eventWindow.human(w.end)}, the last day of the yatra`);
     const nights = nightsLib.nightsOf(inDate, outDate);
     if (nights.length > nightsLib.MAX_NIGHTS) throw badRequest(`A stay can be at most ${nightsLib.MAX_NIGHTS} nights so more pilgrims get a bed`);
     return { checkIn: inDate, checkOut: outDate, nights };
@@ -119,6 +123,7 @@ const quote = async (lodgingId, { beds, checkIn, checkOut, bedNos, guestNames } 
     if (!lodging || !lodging.isActive) throw notFound('Camp not found');
     if (lodging.providerId?.verificationStatus !== 'VERIFIED') throw forbidden('This camp is not verified yet');
     const event = await Event.findById(lodging.eventId).lean();
+    eventWindow.assertOpen(event);
     const stay = parseStay(event, checkIn, checkOut);
     await nightsLib.attachAvailability([lodging], stay);
     if (lodging.availableBeds < count) {
@@ -181,6 +186,7 @@ const book = async (lodgingId, user, { beds, guestNames = [], checkIn, checkOut,
         throw new HttpError(402, `This camp costs ₹${lodging.pricePerNight} per bed per night. Add it to your cart and pay at checkout.`);
     }
     const event = await Event.findById(lodging.eventId).lean();
+    eventWindow.assertOpen(event);
     const stay = parseStay(event, checkIn, checkOut);
     const dates = stay.nights;
     const chosen = bedNos !== undefined && bedNos !== null ? bedAlloc.checkChosen(lodging, bedNos, count) : null;

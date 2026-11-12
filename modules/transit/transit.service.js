@@ -5,7 +5,8 @@ const capacity = require('../../utils/dailyCapacity');
 const Event = require('../event/event.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
-const { istDate, istDateTime, isDateString } = require('../../utils/time');
+const { istDateTime } = require('../../utils/time');
+const eventWindow = require('../../utils/eventWindow');
 const { HttpError, badRequest, notFound, conflict } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 const { groupSize } = require('../../utils/limits');
@@ -21,7 +22,7 @@ const list = async (eventId, { date } = {}) => {
     try {
         ({ day, prebooking } = await dayFor(shuttles[0], date));
     } catch (err) {
-        if (err.status !== 400 || !/ended/.test(err.message)) throw err;
+        if (err.status !== 400 || !/ended|closed/.test(err.message)) throw err;
         // The yatra is over: the routes still show (procession routes need no pass), with no seats to book
         return routes.map((r) => (r.kind === 'SHUTTLE' ? { ...r, seatsPerDay: seatsPerDayOf(r), seatsLeft: 0, closed: err.message } : r));
     }
@@ -54,20 +55,11 @@ const quote = async (routeId, people = 1, date = undefined) => {
  * is a pre-booking (marked on the pass, so the pilgrim and the scanner can see it).
  */
 const dayFor = async (route, date) => {
-    const ev = await Event.findById(route.eventId, 'startDate endDate status').lean();
-    const today = istDate();
-    // Nothing to travel to once the yatra is over (or archived)
-    if (ev?.status === 'ARCHIVED' || (ev?.endDate && istDate(ev.endDate) < today)) throw badRequest('This yatra has ended. Shuttle passes are closed.');
-    const start = ev?.startDate ? istDate(ev.startDate) : today;
-    const last = ev?.endDate ? istDate(ev.endDate) : null;
-    let day = start > today ? start : today;
-    if (date !== undefined && date !== null && date !== '') {
-        if (!isDateString(String(date))) throw badRequest('Choose a valid travel day');
-        day = String(date);
-        if (day < today) throw badRequest('That day has passed. Choose today or a later day of the yatra.');
-        if (day < start || (last && day > last)) throw badRequest(`Choose a day of the yatra (${start} to ${last || start})`);
-    }
-    return { day, prebooking: today < start };
+    const ev = await Event.findById(route.eventId, 'kind startDate endDate status').lean();
+    eventWindow.assertOpen(ev); // nothing to travel to once the yatra is over or closed
+    const w = eventWindow.windowOf(ev);
+    const chosen = date !== undefined && date !== null && date !== '';
+    return { day: chosen ? eventWindow.assertDay(ev, date) : w.first, prebooking: w.prebooking };
 };
 const travelDay = async (route, date) => (await dayFor(route, date)).day;
 

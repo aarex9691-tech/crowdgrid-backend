@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { FoodCenter, FoodSlot, MEALS } = require('./food.model');
 const Provider = require('../provider/provider.model');
 const Event = require('../event/event.model');
+const eventWindow = require('../../utils/eventWindow');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
 const { istDate, istDateTime, isDateString } = require('../../utils/time');
@@ -66,10 +67,13 @@ const claim = async (slotId, user, { people = 1, names = [] } = {}) => {
     const slot = await FoodSlot.findById(slotId).lean();
     if (!slot) throw notFound('Meal slot not found');
     const center = await FoodCenter.findById(slot.foodCenterId).lean();
-    const ev = await Event.findById(slot.eventId, 'startDate').lean();
+    const ev = await Event.findById(slot.eventId, 'kind startDate endDate status').lean();
     const prebooked = !!ev?.startDate && istDate() < istDate(ev.startDate); // taken before the yatra starts
     // Checked before any plate is taken: a closed or removed kitchen hands out nothing
     if (!center || center.isActive === false) throw notFound('This kitchen is closed. Choose another kitchen.');
+    // Only on a day of the yatra, and only while it is open (a passed meal window is checked just below)
+    eventWindow.assertOpen(ev);
+    eventWindow.assertDay(ev, slot.date, { allowPast: true });
     const { from, until } = windowFor(slot);
     if (new Date() > until) throw badRequest(`The ${MEALS[slot.meal].label.toLowerCase()} window is over`);
 

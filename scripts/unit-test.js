@@ -493,6 +493,28 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.ok(!broken.ok && broken.body.database.state === 'not answering' && /reset/.test(broken.body.database.error));
     });
 
+    await check('Bookings are limited to the days of the event (and never a day that has passed)', () => {
+        const ew = require('../utils/eventWindow');
+        const { addDays } = require('../utils/time');
+        const t = istDate();
+        const at = (d) => new Date(`${d}T06:00:00+05:30`);
+        const later = { kind: 'YATRA', startDate: at(addDays(t, 30)), endDate: at(addDays(t, 40)), status: 'ACTIVE' };
+        const w = ew.windowOf(later);
+        assert.ok(w.prebooking && w.first === addDays(t, 30) && w.end === addDays(t, 40));
+        assert.equal(ew.assertDay(later, addDays(t, 35)), addDays(t, 35));
+        assert.throws(() => ew.assertDay(later, addDays(t, 29)), /day of the yatra/);
+        assert.throws(() => ew.assertDay(later, addDays(t, 41)), /day of the yatra/);
+        assert.throws(() => ew.assertDay(later, '2027-02-30'), /valid date/);
+        const running = { kind: 'YATRA', startDate: at(addDays(t, -3)), endDate: at(addDays(t, 3)), status: 'ACTIVE' };
+        assert.ok(!ew.windowOf(running).prebooking && ew.windowOf(running).first === t);
+        assert.throws(() => ew.assertDay(running, addDays(t, -1)), /passed/);
+        assert.equal(ew.assertDay(running, addDays(t, -1), { allowPast: true }), addDays(t, -1));
+        assert.throws(() => ew.assertOpen({ ...running, status: 'ARCHIVED' }), /closed/);
+        assert.throws(() => ew.assertOpen({ ...running, endDate: at(addDays(t, -1)) }), /ended/);
+        assert.throws(() => ew.assertOpen({ ...running, kind: 'PUBLIC', status: 'ARCHIVED' }), /This event is closed/);
+        assert.equal(require('../modules/lodging/nights').MAX_NIGHTS, 5);
+    });
+
     console.log(`\n${passed} passed, ${failed} failed (today in IST: ${istDate()})`);
     process.exit(failed ? 1 : 0);
 })().catch((err) => {

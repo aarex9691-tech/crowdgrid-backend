@@ -2,6 +2,8 @@ const { BedAssignment } = require('../lodging/beds');
 const nightsLib = require('../lodging/nights');
 const mongoose = require('mongoose');
 const Provider = require('../provider/provider.model');
+const Event = require('../event/event.model');
+const eventWindow = require('../../utils/eventWindow');
 const { Lodging, LodgingBooking, CATEGORIES } = require('../lodging/lodging.model');
 const { FoodCenter, FoodSlot, MEALS } = require('../food/food.model');
 const { Pass } = require('../pass/pass.model');
@@ -126,6 +128,10 @@ const setSlot = async (user, centerId, { date, meal, capacity } = {}) => {
     const provider = await resolveProvider(user, center.providerId);
     if (String(provider._id) !== String(center.providerId)) throw forbidden('Not your kitchen');
     if (!isDateString(date)) throw badRequest('date must be YYYY-MM-DD');
+    // Meal slots only on days of the yatra that have not passed
+    const event = await Event.findById(center.eventId, 'kind startDate endDate status').lean();
+    eventWindow.assertOpen(event);
+    eventWindow.assertDay(event, date);
     if (!MEALS[meal]) throw badRequest(`meal must be one of ${Object.keys(MEALS).join(', ')}`);
     const cap = v.int(capacity, 'Meal tokens', { min: 0, max: 20000, required: true });
 

@@ -29,7 +29,7 @@ const nightSchema = new mongoose.Schema(
 nightSchema.index({ lodgingId: 1, date: 1 }, { unique: true });
 const LodgingNight = mongoose.model('LodgingNight', nightSchema);
 
-const MAX_NIGHTS = 7;
+const MAX_NIGHTS = 5; // the longest stay, so more pilgrims get a bed
 
 /** Nights a stay uses: checkIn .. checkOut - 1, or just checkIn for a same-day stay. */
 const nightsOf = (checkIn, checkOut) => {

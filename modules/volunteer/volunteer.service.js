@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { VolunteerApplication, DOMAINS } = require('./volunteer.model');
 const Event = require('../event/event.model');
+const eventWindow = require('../../utils/eventWindow');
 const Provider = require('../provider/provider.model');
 const User = require('../auth/user.model');
 const { issuePass, toClient } = require('../pass/pass.service');
@@ -18,7 +19,14 @@ const DOMAIN_LABELS = {
 
 const apply = async (user, { eventId, providerId, domain, sector, dates, note } = {}) => {
     if (!DOMAINS.includes(domain)) throw badRequest(`Choose a seva domain: ${DOMAINS.join(', ')}`);
-    if (!mongoose.isValidObjectId(eventId) || !(await Event.exists({ _id: eventId }))) throw notFound('Event not found');
+    if (!mongoose.isValidObjectId(eventId)) throw notFound('Event not found');
+    const event = await Event.findById(eventId, 'kind startDate endDate status').lean();
+    eventWindow.assertOpen(event); // 404 if missing; no new seva once the event is closed or over
+    // The days offered must be real days of the event that have not passed (at most 30, no repeats)
+    if (dates !== undefined && !Array.isArray(dates)) throw badRequest('Choose the days you can serve');
+    const days = [...new Set((dates || []).map((d) => String(d)))].slice(0, 30);
+    for (const d of days) eventWindow.assertDay(event, d);
+    days.sort();
     if (providerId && !(await Provider.exists({ _id: providerId, eventId, verificationStatus: 'VERIFIED' }))) {
         throw badRequest('Choose a verified trust for this event');
     }
@@ -29,7 +37,7 @@ const apply = async (user, { eventId, providerId, domain, sector, dates, note } 
             providerId: providerId || undefined,
             domain,
             sector,
-            dates: Array.isArray(dates) ? dates.slice(0, 30) : [],
+            dates: days,
             note,
         });
         return application.toObject();
