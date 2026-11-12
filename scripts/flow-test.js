@@ -273,8 +273,10 @@ async function main() {
             // The order retry must send only the refund it still owes, not that pass's money a second time.
             await Order.updateOne({ _id: dup._id }, { $inc: { refunded: 77 }, $set: { 'payment.refundPending': true, 'payment.refundPendingAmount': bus.fare }, $unset: { 'payment.refundReference': 1 } });
             const sentAmounts = [];
+            const sentKeys = [];
             pg.refund = async (args) => {
                 sentAmounts.push(args.amount);
+                sentKeys.push(args.idempotencyKey);
                 return realRefund.call(pg, args);
             };
             try {
@@ -285,6 +287,7 @@ async function main() {
             const dupRetried = await Order.findById(dup._id).lean();
             check('The queued order refund is sent by the sweep', !dupRetried.payment?.refundPending && !!dupRetried.payment?.refundReference);
             check("The order retry sends only what it still owes (never another pass's refund again)", sentAmounts.includes(bus.fare) && !sentAmounts.includes(bus.fare + 77), `sent ${sentAmounts.join(', ')}`);
+            check('The retry uses the same refund key as the first attempt (the gateway can spot a repeat)', !!dupQueued.payment?.refundKey && sentKeys.includes(dupQueued.payment.refundKey), `${dupQueued.payment?.refundKey} vs ${sentKeys.join(', ')}`);
         }
 
         // ---- 5. Family meal token ----
@@ -741,6 +744,12 @@ async function main() {
             await auth.login({ identifier: PHONE, password: 'Wrong-0000', ip: '192.0.2.44' }).catch(() => {});
             const secondWindow = (await auth.LoginGuard.findOne({ userId: ownPhone.user?._id || ownPhone.user?.id, client: '*' }).lean())?.expireAt;
             check('The account-wide count of wrong passwords keeps its first 15-minute window', !!firstWindow && +firstWindow === +secondWindow, `${firstWindow?.toISOString()} then ${secondWindow?.toISOString()}`);
+            // ...and once that window is over, a new wrong password starts a new count (even before the row is cleaned up)
+            const meId = ownPhone.user?._id || ownPhone.user?.id;
+            await auth.LoginGuard.updateOne({ userId: meId, client: '*' }, { $set: { failed: 29, expireAt: new Date(Date.now() - 1000) } });
+            const afterWindow = await auth.login({ identifier: PHONE, password: 'Wrong-0000', ip: '192.0.2.45' }).catch((e) => e);
+            const freshRow = await auth.LoginGuard.findOne({ userId: meId, client: '*' }).lean();
+            check('An expired wrong-password window starts again from 1 (no early account lock)', afterWindow.status === 401 && freshRow?.failed === 1, `${afterWindow.status} ${freshRow?.failed}`);
             await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '192.0.2.44' }); // clears the counters
         }
 
