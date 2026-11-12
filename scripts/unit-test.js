@@ -471,6 +471,17 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         }
     });
 
+    await check('A broken JSON body gets a 400, an oversized one a 413 (not a server error)', () => {
+        const { errorHandler } = require('../middleware/errors');
+        const res = () => ({ code: 0, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } });
+        const r1 = res();
+        errorHandler(Object.assign(new SyntaxError('Unexpected token'), { type: 'entity.parse.failed', status: 400, expose: true }), { method: 'POST', originalUrl: '/api/x' }, r1, () => {});
+        assert.equal(r1.code, 400);
+        const r2 = res();
+        errorHandler(Object.assign(new Error('request entity too large'), { type: 'entity.too.large', status: 413, expose: true }), { method: 'POST', originalUrl: '/api/x' }, r2, () => {});
+        assert.equal(r2.code, 413);
+    });
+
     await check('Health check: connected and answering is ok; down or silent database is reported', async () => {
         const h = require('../utils/health');
         const fake = (readyState, ping) => ({ readyState, db: { admin: () => ({ command: ping }) } });

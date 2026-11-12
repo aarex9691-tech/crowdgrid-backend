@@ -114,13 +114,31 @@ async function main() {
         const pass2 = tokens === 1 && slotAfter.remaining === 99;
         console.log(pass2 ? '  PASS - one token per person per meal\n' : '  FAIL\n');
 
-        process.exitCode = pass1 && pass1b && pass2 ? 0 : 1;
+        // ---- Test 3: one pilgrim, 5 simultaneous 3-bed bookings for the same night (limit is 5 beds a night) ----
+        const bigCamp = await Lodging.create({
+            eventId: event._id, providerId: provider._id, name: `${TAG} big camp`, sector: 'Test', category: 'FREE_CAMP',
+            totalBeds: 50, heldBeds: 0,
+        });
+        const night3 = addDays(today, 2);
+        console.log('Test 3: one pilgrim sends five 3-bed bookings for the same night at the same instant...');
+        const racers = await Promise.allSettled(
+            Array.from({ length: 5 }, () => lodgingService.book(bigCamp._id, pilgrims[1], { beds: 3, checkIn: night3, checkOut: night3 }))
+        );
+        const held = (await LodgingBooking.find({ userId: pilgrims[1]._id, status: 'CONFIRMED', checkIn: night3 }).lean()).reduce((n, b) => n + b.beds, 0);
+        console.log(`  bookings accepted   : ${racers.filter((r) => r.status === 'fulfilled').length}`);
+        console.log(`  beds held that night: ${held} (limit 5)`);
+        const pass3 = held <= 5 && held === 3;
+        console.log(pass3 ? '  PASS - the 5-beds-a-night limit holds under a race\n' : '  FAIL\n');
+
+        process.exitCode = pass1 && pass1b && pass2 && pass3 ? 0 : 1;
     } finally {
         const ids = pilgrims.map((p) => p._id);
+        const campIds = (await Lodging.find({ eventId: event._id }, '_id').lean()).map((l) => l._id);
         await Promise.all([
             Pass.deleteMany({ eventId: event._id }),
-            BedAssignment.deleteMany({ lodgingId: lodging._id }),
-            nightsLib.LodgingNight.deleteMany({ lodgingId: lodging._id }),
+            BedAssignment.deleteMany({ lodgingId: { $in: campIds } }),
+            mongoose.connection.collection('personnights').deleteMany({ eventId: event._id }),
+            nightsLib.LodgingNight.deleteMany({ lodgingId: { $in: campIds } }),
             LodgingBooking.deleteMany({ eventId: event._id }),
             FoodSlot.deleteMany({ eventId: event._id }),
             FoodCenter.deleteMany({ eventId: event._id }),

@@ -107,6 +107,11 @@ async function main() {
         const five = await lodging.book(bigCamp._id, user, { beds: 5, guestNames: ['Asha Patil', 'Ravi Patil', 'Meena Patil', 'Om Patil', 'Gita Patil'] });
         check('Booking 5 beds (the limit) works', five.booking.beds === 5 && five.pass.details.bedNumbers.length === 5, five.pass.details.location);
         await expectError('A 6th bed on the same night is refused', () => lodging.book(bigCamp._id, user, { beds: 1 }), 400, /limit/i);
+        {
+            // Regression: the cart must refuse it too, before the pilgrim pays (not book-then-refund)
+            const anyPaid = camps.find((c) => c.pricePerNight > 0);
+            await expectError('The cart refuses a 6th bed on the same night before payment', () => orders.create(user, [{ kind: 'LODGING', refId: String(anyPaid._id), input: { beds: 1, guestNames: ['Kiran Patil'], checkIn: five.booking.checkIn, checkOut: five.booking.checkIn } }]), 400, /limit/i);
+        }
 
         // ---- 2b. Beds are counted night by night ----
         {
@@ -234,6 +239,9 @@ async function main() {
                 check('A paid order left without its pass (server stopped) is finished by the sweep', finishedOrder.items[0].status === 'ISSUED' && !!finishedOrder.items[0].passId && swept2.finished >= 1, finishedOrder.items[0].status);
                 if (finishedOrder.items[0].passId) await require('../modules/pass/cancel.service').cancel(finishedOrder.items[0].passId, user).catch(() => {});
             }
+            await orders.sweep();
+            const dupRetried = await Order.findById(dup._id).lean();
+            check('The queued order refund is sent by the sweep', !dupRetried.payment?.refundPending && !!dupRetried.payment?.refundReference);
         }
 
         // ---- 5. Family meal token ----
@@ -459,6 +467,17 @@ async function main() {
             const closed = await sosSvc.closeMine(String(s1.incident._id), user);
             check('"I\'m safe now" closes the alert', closed.status === 'RESOLVED' && closed.closedByUser === true);
             await expectError('A closed alert cannot be closed again', () => sosSvc.closeMine(String(s1.incident._id), user), 404);
+            // Regression: raising and cancelling alerts in a loop floods the control room
+            let throttled = null;
+            for (let i = 0; i < 8 && !throttled; i += 1) {
+                try {
+                    const a = await sosSvc.raise(user, { eventId: String(event._id), type: 'GENERAL' });
+                    await sosSvc.closeMine(String(a.incident._id), user);
+                } catch (e) {
+                    throttled = e;
+                }
+            }
+            check('More than 5 alerts in 10 minutes from one person are slowed down (and told to call 112)', throttled?.status === 429 && /112/.test(throttled.message), throttled?.message);
             await SosIncident.deleteMany({ userId: me._id });
         }
         const publicView = await lostfound.list(null, { kind: 'MISSING' });
@@ -467,6 +486,22 @@ async function main() {
 
         // ---- 12. Team notes round 2: limit of 5, group passes, one QR, other yatras ----
         const transit = require('../modules/transit/transit.service');
+        {
+            // Regression: shuttle seats cannot be sold after the yatra has ended
+            const freeBus = await TransitRoute.findOne({ eventId: event._id, kind: 'SHUTTLE', isActive: true, fare: 0 }).lean();
+            const realEnd = (await Event.findById(event._id, 'endDate').lean()).endDate;
+            await Event.updateOne({ _id: event._id }, { $set: { endDate: new Date(Date.now() - 2 * 86400000) } });
+            try {
+                await expectError('No bus pass once the yatra has ended', () => transit.boardingPass(freeBus._id, user, { people: 1 }), 400, /ended/i);
+            } finally {
+                await Event.updateOne({ _id: event._id }, { $set: { endDate: realEnd } });
+            }
+            // Regression: an archived event takes no more registrations
+            const archivedEv = await events.create({ ...base, title: 'Flow test archived event', ticketPrice: 0, capacity: 5 }, host);
+            groupIds.push(archivedEv._id);
+            await Event.updateOne({ _id: archivedEv._id }, { $set: { status: 'ARCHIVED' } });
+            await expectError('An archived event takes no registrations', () => events.register(archivedEv._id, user, { people: 1 }), 400, /no longer open/i);
+        }
         const Provider = require('../modules/provider/provider.model');
         const { MAX_PER_ACCOUNT } = require('../utils/limits');
         check('Booking limit is 5 per account everywhere', MAX_PER_ACCOUNT === 5 && lodging.MAX_BEDS_PER_USER === 5 && food.MAX_PEOPLE_PER_TOKEN === 5);
@@ -543,6 +578,28 @@ async function main() {
         check('Paid ticket 30 h before: quote shows 50% back (₹150 of ₹300)', paidQuote.percent === 50 && paidQuote.refund === 150 && paidQuote.charge === 150, `${paidQuote.percent}% ₹${paidQuote.refund}`);
         const paidCancel = await cancellation.cancel(paidTix.pass._id, user, new Date(startAt - 30 * H));
         check('Cancelling records the refund on the pass', paidCancel.refund === 150 && paidCancel.pass.refund?.amount === 150, paidCancel.message);
+        {
+            // Regression: the refund gateway is down when a paid ticket is cancelled
+            const pg2 = require('../modules/order/payment').gateway();
+            const realRefund2 = pg2.refund;
+            const paidTix2 = await events.register(cEv._id, user, { people: 1, paidByOrder: { _id: new mongoose.Types.ObjectId(), amount: 150 } });
+            pg2.refund = async () => {
+                throw new Error('gateway unreachable');
+            };
+            let cancelErr = null;
+            try {
+                await cancellation.cancel(paidTix2.pass._id, user, new Date(startAt - 72 * H));
+            } catch (e) {
+                cancelErr = e;
+            } finally {
+                pg2.refund = realRefund2;
+            }
+            const queued = await Pass.findById(paidTix2.pass._id).lean();
+            check('Cancelling works while the refund gateway is down (refund queued)', !cancelErr && queued.status === 'CANCELLED' && queued.refund?.pending === true, cancelErr?.message);
+            await orders.sweep();
+            const sent = await Pass.findById(paidTix2.pass._id).lean();
+            check('The queued pass refund is sent by the sweep', !sent.refund?.pending && !!sent.refund?.reference);
+        }
         const late = await events.register(cEv._id, user, { people: 1 });
         await expectError('A ticket cannot be cancelled after the event starts', () => cancellation.cancel(late.pass._id, user, new Date(startAt.getTime() + 60000)), 400, /already started/);
 
@@ -587,6 +644,14 @@ async function main() {
         }
 
         check('Only the control room can mark lanes', hasPermission('AUTHORITY', 'route:manage') && !hasPermission('VOLUNTEER', 'route:manage') && !hasPermission('USER', 'route:manage'));
+
+        // Regression: wrong passwords from one device must not lock the pilgrim out on their own phone
+        {
+            for (let i = 0; i < 5; i += 1) await auth.login({ identifier: PHONE, password: 'Wrong-0000', ip: '203.0.113.7' }).catch(() => {});
+            await expectError('After 5 wrong passwords that device is locked out', () => auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '203.0.113.7' }), 429);
+            const ownPhone = await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '198.51.100.20' }).catch((e) => e);
+            check('The pilgrim can still log in from their own phone', !!ownPhone.token, ownPhone.message);
+        }
 
         // ---- Help desk password reset (last: it changes the test pilgrim's password) ----
         const helpdesk = require('../modules/auth/helpdesk');
