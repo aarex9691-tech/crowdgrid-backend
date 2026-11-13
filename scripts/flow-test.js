@@ -61,7 +61,9 @@ async function main() {
         // By default sign-up needs no code (the screen has no code step)
         const savedOtpSetting = process.env.OTP_REQUIRED;
         delete process.env.OTP_REQUIRED;
-        const plain = await auth.register({ name: 'Flow Test Pilgrim Two', phone: PHONE_NO_CODE, countryCode: '91', password: 'Crowd@123' });
+        // Registration is by mobile number only: an email sent with the sign-up is not stored
+        const plain = await auth.register({ name: 'Flow Test Pilgrim Two', phone: PHONE_NO_CODE, countryCode: '91', password: 'Crowd@123', email: 'signup.only@example.com' });
+        check('Sign-up is by mobile number only (an email in the sign-up is not saved)', !(await User.findOne({ phone: PHONE_NO_CODE }).lean())?.email && !(await User.exists({ email: 'signup.only@example.com' })));
         check('Sign-up works without a code (OTP is off by default)', !!plain.token && plain.user.role === 'USER');
         await User.deleteOne({ phone: PHONE_NO_CODE });
 
@@ -327,6 +329,20 @@ async function main() {
         // ---- 6. Profile ----
         const prof = await auth.updateProfile(user, { email: 'flow.test@example.com', dateOfBirth: '1990-05-14', gender: 'female', city: 'Pune', emergencyContact: { name: 'Raj', phone: '9876543210' } });
         check('Profile saves email, date of birth, gender, city, emergency contact', prof.email === 'flow.test@example.com' && prof.gender === 'FEMALE' && prof.city === 'Pune' && !!prof.dateOfBirth && prof.emergencyContact?.phone === '9876543210');
+        {
+            // Log in with the email added in the profile (any capitals, spaces around it)
+            const byMail = await auth.login({ identifier: '  Flow.Test@Example.COM ', password: 'Crowd@123', ip: '192.0.2.60' }).catch((e) => e);
+            check('A pilgrim can log in with the email in their profile', String(byMail.user?._id || byMail.user?.id) === String(me._id), byMail.message);
+            const wrongPw = await auth.login({ identifier: 'flow.test@example.com', password: 'Wrong-0000', ip: '192.0.2.61' }).catch((e) => e);
+            const noSuch = await auth.login({ identifier: 'nobody.here@example.com', password: 'Crowd@123', ip: '192.0.2.61' }).catch((e) => e);
+            check('A wrong password and an unknown email get the same answer (no hint which emails exist)', wrongPw.status === 401 && noSuch.status === 401 && wrongPw.message === noSuch.message, `${wrongPw.message} / ${noSuch.message}`);
+            check('The login error mentions email too', /email/i.test(noSuch.message || ''), noSuch.message);
+            await expectError('Another account cannot take an email that is already used', async () => {
+                const ramesh = await User.findOne({ phone: '9000000006' }).lean();
+                return auth.updateProfile({ ...ramesh, id: String(ramesh._id) }, { email: 'FLOW.TEST@example.com' });
+            }, 409);
+            await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '192.0.2.61' }); // clears the wrong-password count
+        }
         await auth.updateProfile(user, { city: '' });
         check('Clearing a field removes it from the database', !(await User.findById(me._id).lean()).city);
         {
