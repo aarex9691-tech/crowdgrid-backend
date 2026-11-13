@@ -9,7 +9,7 @@ const nightsLib = require('../lodging/nights');
 const audit = require('../audit/audit.service');
 const realtime = require('../../utils/realtime');
 const eventWindow = require('../../utils/eventWindow');
-const { istDate, istDateTime } = require('../../utils/time');
+const { istDate } = require('../../utils/time');
 const { ROLES } = require('../../config/roles');
 const { badRequest, notFound, conflict } = require('../../utils/httpError');
 
@@ -55,8 +55,15 @@ const sectorsFor = async (eventId) => {
     return [...new Set([...(event.sectors || []), ...camps, ...apps].filter(Boolean).map(String))].sort();
 };
 
-/** Open duties: everyone checked in, plus shifts that have not ended yet. */
-const openDutiesFilter = (now) => ({ $or: [{ status: 'ON_DUTY' }, { status: 'SCHEDULED', end: { $gt: now } }] });
+/**
+ * Open duties: checked in and not long past the end, plus shifts that have not ended yet.
+ * Someone who forgot to check out stops counting 2 hours after their shift ended, so an empty
+ * sector does not look staffed (and their phone stops showing an old shift).
+ */
+const CHECKOUT_GRACE_MS = 2 * 3600 * 1000;
+const openDutiesFilter = (now) => ({
+    $or: [{ status: 'ON_DUTY', end: { $gt: new Date(now - CHECKOUT_GRACE_MS) } }, { status: 'SCHEDULED', end: { $gt: now } }],
+});
 
 const dutyView = (d) =>
     d && { id: String(d._id), sector: d.sector, post: d.post || '', start: d.start, end: d.end, status: d.status, checkedInAt: d.checkedInAt };
@@ -172,18 +179,21 @@ const assertNoOverlap = async (volunteerId, start, end, exceptId) => {
     }
 };
 
-const checkTimes = (start, end, event) => {
+const checkTimes = (start, end, event, { isNew = false } = {}) => {
     if (end <= start) throw badRequest('The shift must end after it starts');
     if (end - start > MAX_SHIFT_HOURS * HOUR) throw badRequest(`A shift can be at most ${MAX_SHIFT_HOURS} hours`);
     if (end <= new Date()) throw badRequest('That shift is already over. Choose a later time.');
     if (start >= new Date(event.endDate)) throw badRequest('The shift must start before the event ends');
+    if (start < new Date(new Date(event.startDate) - CHECKIN_EARLY_MS)) throw badRequest('The shift must be during the event');
+    // a new shift that "started" hours ago is almost always a mistyped date: it would show as late at once
+    if (isNew && start < new Date(Date.now() - HOUR)) throw badRequest('That start time is in the past. Choose now or a later time.');
 };
 
 /** Control room puts an approved volunteer on a sector post for a shift. */
 const assign = async (actor, { eventId, volunteerId, sector, post, start, end } = {}) => {
     idOrThrow(eventId, 'Event');
     idOrThrow(volunteerId, 'Volunteer');
-    const event = await Event.findById(eventId, 'title kind status endDate').lean();
+    const event = await Event.findById(eventId, 'title kind status startDate endDate').lean();
     eventWindow.assertOpen(event);
     const approved = await VolunteerApplication.exists({ eventId, userId: volunteerId, status: 'APPROVED' });
     const person = await User.findOne({ _id: volunteerId, role: ROLES.VOLUNTEER, isActive: { $ne: false } }, 'name').lean();
@@ -192,7 +202,7 @@ const assign = async (actor, { eventId, volunteerId, sector, post, start, end } 
     if (!(await sectorsFor(eventId)).includes(where)) throw badRequest('Choose one of the event sectors');
     const from = toDate(start, 'start time');
     const to = toDate(end, 'end time');
-    checkTimes(from, to, event);
+    checkTimes(from, to, event, { isNew: true });
     // Two control-room desks assigning the same person at the same instant could both pass this
     // check; the roster shows the clash straight away and either shift can be cancelled.
     await assertNoOverlap(volunteerId, from, to);
@@ -214,6 +224,7 @@ const update = async (actor, id, { sector, post, start, end, status } = {}) => {
     const duty = await Duty.findById(id);
     if (!duty) throw notFound('Duty not found');
     if (!['SCHEDULED', 'ON_DUTY'].includes(duty.status)) throw conflict('This duty has already finished');
+    const statusBefore = duty.status;
     const person = await User.findById(duty.volunteerId, 'name').lean();
     let action = 'DUTY_UPDATED';
     let summary;
@@ -242,7 +253,8 @@ const update = async (actor, id, { sector, post, start, end, status } = {}) => {
         if (start !== undefined || end !== undefined) {
             const from = start !== undefined ? toDate(start, 'start time') : duty.start;
             const to = end !== undefined ? toDate(end, 'end time') : duty.end;
-            const event = await Event.findById(duty.eventId, 'endDate').lean();
+            const event = await Event.findById(duty.eventId, 'kind status startDate endDate').lean();
+            eventWindow.assertOpen(event); // 404 if the event is gone; no moves once it is closed or over
             checkTimes(from, to, event);
             await assertNoOverlap(duty.volunteerId, from, to, duty._id);
             duty.start = from;
@@ -250,7 +262,12 @@ const update = async (actor, id, { sector, post, start, end, status } = {}) => {
         }
         summary = `${actor.name} moved ${person?.name || 'a volunteer'} to ${duty.sector}${duty.post ? ` (${duty.post})` : ''}`;
     }
-    await duty.save();
+    // Save only if nobody changed the duty meanwhile (e.g. the volunteer checked in at that moment)
+    const saved = await Duty.updateOne(
+        { _id: duty._id, status: statusBefore },
+        { $set: { status: duty.status, sector: duty.sector, post: duty.post, start: duty.start, end: duty.end, ...(duty.checkedOutAt ? { checkedOutAt: duty.checkedOutAt } : {}) } }
+    );
+    if (!saved.matchedCount) throw conflict('This duty just changed (the volunteer may have checked in). Refresh and try again.');
     audit.record({ actor, action, targetType: 'Duty', targetId: duty._id, summary });
     notifyDuty(duty.volunteerId, 'updated');
     return duty.toObject();

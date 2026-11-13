@@ -52,7 +52,11 @@ async function main() {
         const phone = `90000201${String(i + 1).padStart(2, '0')}`;
         let user = await User.findOne({ countryCode: '91', phone });
         if (!user) user = await User.create({ name: NAMES[i], phone, countryCode: '91', role: 'VOLUNTEER', passwordHash });
-        else if (user.role === 'USER') await User.updateOne({ _id: user._id }, { $set: { role: 'VOLUNTEER' } });
+        else if (user.role !== 'VOLUNTEER') {
+            // someone real signed up with this number: never change their role
+            console.log(`Skipping ${phone}: it belongs to an existing ${user.role} account`);
+            continue;
+        }
         await VolunteerApplication.updateOne(
             { userId: user._id, eventId: event._id },
             { $set: { domain: DOMAINS[i % DOMAINS.length], sector: sectors[i % sectors.length], dates: [today], status: 'APPROVED', reviewedAt: new Date() } },

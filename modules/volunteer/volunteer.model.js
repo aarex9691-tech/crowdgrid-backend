@@ -21,5 +21,6 @@ const applicationSchema = new mongoose.Schema(
 
 // One application per person per event
 applicationSchema.index({ userId: 1, eventId: 1 }, { unique: true });
+applicationSchema.index({ eventId: 1, status: 1 }); // the control room's roster of approved volunteers
 
 module.exports = { VolunteerApplication: mongoose.model('VolunteerApplication', applicationSchema), DOMAINS };
