@@ -41,6 +41,14 @@ const loginGuardSchema = new mongoose.Schema({
 loginGuardSchema.index({ userId: 1, client: 1 }, { unique: true });
 loginGuardSchema.index({ expireAt: 1 }, { expireAfterSeconds: 0 });
 const LoginGuard = mongoose.models.LoginGuard || mongoose.model('LoginGuard', loginGuardSchema);
+/**
+ * Unknown mobile numbers and emails get their own counters too, under a made-up id derived from what
+ * was typed. Then a made-up email is paused after 5 wrong tries exactly like a real one, and the
+ * lockout cannot be used to find out which emails or numbers have an account.
+ */
+const ghostIdFor = (query) =>
+    new mongoose.Types.ObjectId(require('crypto').createHash('sha256').update(`cg-login:${JSON.stringify(query)}`).digest().subarray(0, 12));
+const MAX_PASSWORD_LENGTH = 128;
 const lockedFor = (until) => Math.max(1, Math.ceil((until - Date.now()) / 60000));
 
 const signToken = (user) =>
@@ -107,6 +115,7 @@ const register = async ({ name: rawName, phone, countryCode, password, otp: code
 /** Log in with mobile number (or email) and password. */
 let dummy;
 const dummyHash = async () => (dummy ||= await bcrypt.hash('not-a-real-password', SALT_ROUNDS));
+dummyHash().catch(() => {}); // ready before the first login, so that one is not slower either
 
 const login = async ({ phone, email, identifier, countryCode, password, ip }) => {
     const id = String(identifier || phone || email || '').trim();
@@ -116,31 +125,36 @@ const login = async ({ phone, email, identifier, countryCode, password, ip }) =>
     // An email (once added in the profile) or the registered mobile number
     const query = id.includes('@') ? { email: id.toLowerCase() } : phoneQuery(parseLoginPhone(id, countryCode));
     const user = await User.findOne(query).select('+passwordHash');
+    const guardId = user ? user._id : ghostIdFor(query); // counters for real and made-up identities alike
 
     // Refuse while this device, or (after very many failures everywhere) the whole account, is paused
     const client = String(ip || 'unknown');
-    if (user) {
+    {
         const now = new Date();
-        if (user.lockUntil && user.lockUntil > now) {
-            const mins = lockedFor(user.lockUntil);
+        const accountUntil = user ? user.lockUntil : (await LoginGuard.findOne({ userId: guardId, client: '*' }).lean())?.lockUntil;
+        if (accountUntil && accountUntil > now) {
+            const mins = lockedFor(accountUntil);
             throw new HttpError(429, `Too many wrong attempts on this account. Try again in ${mins} minute${mins > 1 ? 's' : ''}, or visit a help desk.`);
         }
-        const guard = await LoginGuard.findOne({ userId: user._id, client }).lean();
+        const guard = await LoginGuard.findOne({ userId: guardId, client }).lean();
         if (guard?.lockUntil && guard.lockUntil > now) {
             const mins = lockedFor(guard.lockUntil);
             throw new HttpError(429, `Too many wrong attempts from this device. Try again in ${mins} minute${mins > 1 ? 's' : ''}.`);
         }
     }
 
-    // Unknown accounts still run one password check, so the answer takes as long either way
-    // (otherwise the speed of the reply would tell which emails or numbers have an account)
-    const ok = user ? user.isActive && (await bcrypt.compare(String(password), user.passwordHash)) : await bcrypt.compare(String(password), await dummyHash()).then(() => false);
+    // Always one password check (a stand-in hash for unknown accounts), so the answer takes as long
+    // either way: the speed of the reply must not tell which emails or numbers have an account.
+    // An absurdly long password is simply wrong (passwords are at most 128 characters).
+    const typed = String(password);
+    const match = await bcrypt.compare(typed.length > MAX_PASSWORD_LENGTH ? '' : typed, user?.passwordHash || (await dummyHash()));
+    const ok = !!user && user.isActive && match && typed.length <= MAX_PASSWORD_LENGTH;
     if (!ok) {
-        if (user) {
+        {
             const lockAt = new Date(Date.now() + LOCK_MINUTES * 60000);
             // Atomic counters, so parallel guesses are all counted
             const guard = await LoginGuard.findOneAndUpdate(
-                { userId: user._id, client },
+                { userId: guardId, client },
                 { $inc: { failed: 1 }, $set: { expireAt: lockAt } },
                 { upsert: true, returnDocument: 'after' }
             );
@@ -149,10 +163,15 @@ const login = async ({ phone, email, identifier, countryCode, password, ip }) =>
             // by the TTL cleanup, which can lag a minute) starts a new window instead of adding to the old count.
             const live = { $gt: ['$expireAt', new Date()] };
             const account = await LoginGuard.findOneAndUpdate(
-                { userId: user._id, client: '*' },
+                { userId: guardId, client: '*' },
                 [{ $set: { failed: { $cond: [live, { $add: [{ $ifNull: ['$failed', 0] }, 1] }, 1] }, expireAt: { $cond: [live, '$expireAt', lockAt] } } }],
                 { upsert: true, returnDocument: 'after', updatePipeline: true }
             );
+            if (account.failed >= MAX_ACCOUNT_FAILS && !user) {
+                // a made-up identity is paused on its counter row (there is no account to mark)
+                await LoginGuard.updateOne({ _id: account._id }, { $set: { failed: 0, lockUntil: lockAt, expireAt: lockAt } });
+                throw new HttpError(429, `Too many wrong attempts on this account. Try again in ${LOCK_MINUTES} minutes, or visit a help desk.`);
+            }
             if (account.failed >= MAX_ACCOUNT_FAILS) {
                 await User.updateOne({ _id: user._id }, { $set: { lockUntil: lockAt } });
                 await LoginGuard.deleteOne({ _id: account._id });
@@ -234,8 +253,20 @@ const updateProfile = async (user, body = {}) => {
     }
     if (body.email !== undefined) {
         const email = String(body.email || '').trim().toLowerCase();
-        if (email && !EMAIL_RE.test(email)) throw badRequest('Enter a valid email address');
-        if (email && (await User.exists({ email, _id: { $ne: user._id } }))) throw conflict('This email is already used by another account');
+        if (email.length > 254 || (email && !EMAIL_RE.test(email))) throw badRequest('Enter a valid email address');
+        const current = (await User.findById(user._id, 'email').lean())?.email || '';
+        if (email && email !== current) {
+            // At most 5 tries a day to set a new email (counted before the "already used" check),
+            // so the profile cannot be used to test which emails are registered.
+            const since = new Date(Date.now() - 24 * 3600 * 1000);
+            const allowed = await User.findOneAndUpdate(
+                { _id: user._id, $expr: { $lt: [{ $size: { $filter: { input: { $ifNull: ['$emailChangesAt', []] }, cond: { $gt: ['$$this', since] } } } }, 5] } },
+                [{ $set: { emailChangesAt: { $concatArrays: [{ $filter: { input: { $ifNull: ['$emailChangesAt', []] }, cond: { $gt: ['$$this', since] } } }, [new Date()]] } } }],
+                { updatePipeline: true, projection: { _id: 1 } }
+            );
+            if (!allowed) throw new HttpError(429, 'You can change your email 5 times a day. Try again tomorrow.');
+            if (await User.exists({ email, _id: { $ne: user._id } })) throw conflict('This email is already used by another account');
+        }
         put('email', email);
     }
     if (body.dateOfBirth !== undefined) {

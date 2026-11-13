@@ -14,6 +14,7 @@ const userSchema = new mongoose.Schema(
             match: [/^\d{6,14}$/, 'Enter a valid mobile number'],
         },
         email: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
+        emailChangesAt: { type: [Date], select: false }, // recent tries to set a new email (limited to 5 a day)
         passwordHash: { type: String, required: true, select: false },
         role: { type: String, enum: Object.values(ROLES), default: ROLES.USER },
         // NGO admins and volunteers belong to a service provider (NGO / trust)
