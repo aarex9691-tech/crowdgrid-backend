@@ -342,6 +342,28 @@ async function main() {
                 return auth.updateProfile({ ...ramesh, id: String(ramesh._id) }, { email: 'FLOW.TEST@example.com' });
             }, 409);
             await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '192.0.2.61' }); // clears the wrong-password count
+            // The lockout must not tell real accounts from made-up ones: both are paused after 5 wrong tries
+            const ghostIp = '198.51.100.77';
+            await auth.LoginGuard.deleteMany({ client: ghostIp });
+            let ghostLast;
+            for (let i = 0; i < 6; i += 1) ghostLast = await auth.login({ identifier: 'nobody.ghost@example.com', password: 'Wrong-0000', ip: ghostIp }).catch((e) => e);
+            check('An email with no account is paused after 5 tries too (the lockout reveals nothing)', ghostLast.status === 429 && /this device/.test(ghostLast.message), `${ghostLast.status} ${ghostLast.message}`);
+            await auth.LoginGuard.deleteMany({ client: ghostIp });
+            // Changing the profile email is limited, so it cannot be used to test which emails are registered
+            let limited = null;
+            let changes = 0;
+            for (let i = 0; i < 7 && !limited; i += 1) {
+                try {
+                    await auth.updateProfile(user, { email: `flow.test+${i}@example.com` });
+                    changes += 1;
+                } catch (e) {
+                    limited = e;
+                }
+            }
+            check('The profile email can be changed at most 5 times a day', limited?.status === 429 && changes === 4, `${changes} more changes, then ${limited?.status} ${limited?.message}`);
+            const tooLong = await auth.login({ identifier: PHONE, password: 'x'.repeat(5000), ip: '192.0.2.62' }).catch((e) => e);
+            check('A very long password is just a wrong password (no slow hashing of huge input)', tooLong.status === 401, `${tooLong.status}`);
+            await auth.login({ identifier: PHONE, password: 'Crowd@123', ip: '192.0.2.62' });
         }
         await auth.updateProfile(user, { city: '' });
         check('Clearing a field removes it from the database', !(await User.findById(me._id).lean()).city);
