@@ -516,6 +516,22 @@ const at = (day, hhmm) => istDateTime(day, hhmm);
         assert.equal(require('../modules/lodging/nights').MAX_NIGHTS, 5);
     });
 
+    await check('Organisation IDs: GSTIN check digit, CIN, NGO Darpan, AISHE and Udyam formats', () => {
+        const ids = require('../utils/orgIds');
+        assert.equal(ids.check('GSTIN', '27AAPFU0939F1ZV').status, 'VALID');
+        assert.equal(ids.check('GSTIN', '27aapfu0939f1zv').status, 'VALID'); // any capitals
+        assert.equal(ids.check('GSTIN', '27AAPFU0939F1ZX').status, 'INVALID'); // one character changed
+        assert.equal(ids.check('GSTIN', '27AAPFU0939F1Z').status, 'INVALID');
+        assert.equal(ids.check('CIN', 'U72200MH2009PTC123456').status, 'VALID');
+        assert.equal(ids.check('CIN', 'X72200MH2009PTC123456').status, 'INVALID');
+        assert.equal(ids.check('DARPAN', 'MH/2017/0123456').status, 'VALID');
+        assert.equal(ids.check('AISHE', 'C-12345').status, 'VALID');
+        assert.equal(ids.check('AISHE', 'X-12').status, 'INVALID');
+        assert.equal(ids.check('UDYAM', 'UDYAM-MH-12-0012345').status, 'VALID');
+        assert.equal(ids.check('REG', 'E-1234/Nashik').status, 'UNCHECKED'); // trust / society numbers have no national format
+        assert.equal(ids.normalise('GSTIN', ' 27aapfu 0939f1zv '), '27AAPFU0939F1ZV');
+    });
+
     console.log(`\n${passed} passed, ${failed} failed (today in IST: ${istDate()})`);
     process.exit(failed ? 1 : 0);
 })().catch((err) => {

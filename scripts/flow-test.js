@@ -422,6 +422,93 @@ async function main() {
         const { hasPermission } = require('../config/roles');
         check('Admins and hosts cannot book (they use their own dashboards)', ['SUPER_ADMIN', 'AUTHORITY', 'CORPORATE_ADMIN', 'NGO_ADMIN', 'VOLUNTEER'].every((r) => !hasPermission(r, 'booking:create')) && hasPermission('USER', 'booking:create'));
 
+        {
+            // ---- 7b. Organisations apply to host events; the Super Admin verifies them ----
+            const hostsSvc = require('../modules/host/host.service');
+            const { HostApplication } = require('../modules/host/host.model');
+            const HP = '6999999993';
+            const HP2 = '6999999994';
+            const superRow = await User.findOne({ role: 'SUPER_ADMIN' }).lean();
+            const sa = { ...superRow, id: String(superRow._id) };
+            const rameshRow = await User.findOne({ phone: '9000000006' }).lean();
+            const ramesh = { ...rameshRow, id: String(rameshRow._id) };
+            const cleanHosts = async () => {
+                const ids = (await User.find({ phone: { $in: [HP, HP2] } }, '_id').lean()).map((u) => u._id);
+                await Promise.all([
+                    HostApplication.deleteMany({ $or: [{ applicantId: { $in: [...ids, rameshRow._id] } }, { orgName: /^Flow Test/ }] }),
+                    Event.deleteMany({ organizerId: { $in: ids } }),
+                    User.deleteMany({ _id: { $in: ids } }),
+                ]);
+            };
+            await cleanHosts();
+            try {
+                await auth.register({ name: 'Asha Kulkarni', phone: HP, countryCode: '91', password: 'Crowd@123' });
+                const applicantRow = await User.findOne({ phone: HP }).lean();
+                const applicant = { ...applicantRow, id: String(applicantRow._id) };
+                const pdf = Buffer.from('%PDF-1.4\n% flow test certificate\n');
+                const form = { kind: 'BOTH', orgName: 'Flow Test College of Arts', orgType: 'EDUCATION', idType: 'AISHE', idNumber: 'c-12345', city: 'Nashik', contactName: 'Asha Kulkarni', contactCountryCode: '91', contactPhone: '9876500011', contactEmail: 'office@flowtestcollege.edu.in', website: 'https://www.flowtestcollege.edu.in', expectedSize: 800, description: 'Annual cultural fest open to the public, and campus seminars for students.' };
+                check('Only the Super Admin reviews host requests; only pilgrims can apply', hasPermission('SUPER_ADMIN', 'host:review') && !hasPermission('AUTHORITY', 'host:review') && hasPermission('USER', 'host:apply') && !hasPermission('VOLUNTEER', 'host:apply'));
+                await expectError('A made-up GSTIN is refused (its check digit is wrong)', () => hostsSvc.apply(applicant, { ...form, idType: 'GSTIN', idNumber: '27AAPFU0939F1ZX' }, pdf), 400, /GSTIN/);
+                await expectError('A CIN in the wrong format is refused', () => hostsSvc.apply(applicant, { ...form, idType: 'CIN', idNumber: 'U12345' }, pdf), 400, /CIN/);
+                await expectError('An application needs the registration certificate', () => hostsSvc.apply(applicant, form, null), 400, /certificate/i);
+                await expectError('The certificate must be a PDF or an image', () => hostsSvc.apply(applicant, form, Buffer.from('just some text, not a document')), 400, /PDF|image/i);
+                await expectError('The kind of events must be public, corporate or both', () => hostsSvc.apply(applicant, { ...form, kind: 'PRIVATE' }, pdf), 400);
+                const app1 = await hostsSvc.apply(applicant, form, pdf);
+                check('An organisation can apply to host both kinds of events', app1.status === 'PENDING' && app1.kind === 'BOTH' && app1.idNumber === 'C-12345' && !app1.document?.data, app1.status);
+                await expectError('Only one request can wait for review at a time', () => hostsSvc.apply(applicant, form, pdf), 409);
+                await expectError('Another account cannot apply with the same registration number', () => hostsSvc.apply(ramesh, { ...form, orgName: 'Flow Test Copycat', contactPhone: '9876500012' }, pdf), 409, /already/i);
+                const mine = await hostsSvc.mine(applicant);
+                check('The applicant can see the status of their request', mine[0]?.status === 'PENDING' && mine[0]?.orgName === form.orgName);
+
+                const queue = await hostsSvc.list({ status: 'PENDING' });
+                const row = queue.find((a) => String(a._id) === String(app1._id));
+                check('The review queue shows a verification checklist', row?.checks?.idFormat === 'VALID' && row.checks.document === true && row.checks.websiteMatchesEmail === true && typeof row.checks.accountAgeDays === 'number', JSON.stringify(row?.checks));
+                check('The certificate file is not sent with the list', row && !row.document?.data);
+                const doc = await hostsSvc.document(app1._id, sa);
+                check('The Super Admin can open the certificate', doc.contentType === 'application/pdf' && doc.data.length === pdf.length);
+                await expectError('Someone else cannot open the certificate', () => hostsSvc.document(app1._id, ramesh), 404);
+                await expectError('Rejecting a request needs a reason', () => hostsSvc.decide(app1._id, sa, { decision: 'REJECTED' }), 400, /reason/i);
+
+                await hostsSvc.decide(app1._id, sa, { decision: 'APPROVED', note: 'AISHE code and certificate checked' });
+                const after = await User.findById(applicantRow._id).lean();
+                check('Approval makes the account an Organisation Host (public and campus events)', after.role === 'ORG_HOST' && after.organisationName === form.orgName, after.role);
+                await expectError('A request cannot be decided twice', () => hostsSvc.decide(app1._id, sa, { decision: 'REJECTED', reason: 'Changed our mind' }), 409);
+                const orgHost = { ...after, id: String(after._id) };
+
+                const pub = await events.create({ ...base, title: 'Flow Test open lecture', ticketPrice: 0 }, orgHost);
+                check('An approved host publishes directly, with a Verified organiser badge', pub.status === 'ACTIVE' && pub.organiserVerified === true && pub.organiserName === form.orgName, `${pub.status} ${pub.organiserName}`);
+                const listed = (await events.list({ kind: 'PUBLIC' })).find((e) => String(e._id) === String(pub._id));
+                check('The badge shows in the public event list', listed?.organiserVerified === true && listed?.organiserName === form.orgName);
+                const corp = await events.create({ kind: 'CORPORATE', title: 'Flow Test campus seminar', companyName: form.orgName, venue: 'Main hall', city: 'Nashik', startDate: start, endDate: new Date(start.getTime() + 3600e3), sessions: [{ title: 'Opening talk' }] }, orgHost).catch((e) => e);
+                check('An Organisation Host can also run campus events', corp.kind === 'CORPORATE' && !!corp.accessCode, corp.message);
+                await expectError('A host cannot change another organiser\'s event', () => events.update(hostedId, { title: 'Taken over' }, orgHost), 403);
+                check('Each host role covers only its own kind of event', hasPermission('EVENT_HOST', 'event:create:public') && !hasPermission('EVENT_HOST', 'event:create:corporate') && hasPermission('ORG_HOST', 'event:create:public') && hasPermission('ORG_HOST', 'event:create:corporate') && !hasPermission('CORPORATE_ADMIN', 'event:create:public'));
+                const otherTicket = await passes.scan(tPaid.passes[0].qr, orgHost);
+                check('A host\'s scanner refuses tickets for other organisers\' events', otherTicket.result === 'REJECTED' && otherTicket.reason === 'WRONG_EVENT' && (await Pass.findById(tPaid.passes[0]._id).lean()).status === 'ACTIVE', otherTicket.reason);
+
+                // A rejected organisation is told why, keeps a normal account, and can apply again
+                await auth.register({ name: 'Ravi Deshpande', phone: HP2, countryCode: '91', password: 'Crowd@123' });
+                const secondRow = await User.findOne({ phone: HP2 }).lean();
+                const second = { ...secondRow, id: String(secondRow._id) };
+                const gst = { ...form, kind: 'PUBLIC', orgName: 'Flow Test Cultural Trust', orgType: 'CHARITY', idType: 'GSTIN', idNumber: '27AAPFU0939F1ZV', contactPhone: '9876500013', contactEmail: 'trust@gmail.com', website: '' };
+                const app2 = await hostsSvc.apply(second, gst, pdf);
+                const row2 = (await hostsSvc.list({ status: 'PENDING' })).find((a) => String(a._id) === String(app2._id));
+                check('A real GSTIN passes the check-digit test', row2?.checks?.idFormat === 'VALID', row2?.checks?.idFormat);
+                await hostsSvc.decide(app2._id, sa, { decision: 'REJECTED', reason: 'The certificate is for a different trust' });
+                const mine2 = await hostsSvc.mine(second);
+                check('A rejected applicant sees the reason and keeps a pilgrim account', mine2[0]?.status === 'REJECTED' && /different trust/.test(mine2[0]?.rejectionReason || '') && (await User.findById(secondRow._id).lean()).role === 'USER');
+                const again = await hostsSvc.apply(second, gst, pdf).catch((e) => e);
+                check('After a rejection the organisation can apply again (same ID)', again.status === 'PENDING', again.message);
+                await hostsSvc.decide(again._id, sa, { decision: 'APPROVED' });
+                check('A public-events organisation becomes an Event Host', (await User.findById(secondRow._id).lean()).role === 'EVENT_HOST');
+                const createdStaff = await auth.createStaff({ name: 'Flow Test Direct Host', phone: '6999999995', countryCode: '91', password: 'Crowd@123', role: 'ORG_HOST', organisationName: 'Flow Test Direct Org' }, sa).catch((e) => e);
+                check('The Super Admin can also create a host account directly', createdStaff.role === 'ORG_HOST', createdStaff.message);
+                await User.deleteOne({ phone: '6999999995' });
+            } finally {
+                await cleanHosts();
+            }
+        }
+
         // ---- 8. One personal QR ----
         // Profile picture: checked, stored, replaced, shown to gate staff, removed
         const avatar = require('../modules/auth/avatar');
