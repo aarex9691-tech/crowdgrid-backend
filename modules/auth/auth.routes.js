@@ -24,8 +24,8 @@ router.post('/otp', authLimiter, async (req, res) => {
 
 // Sign-up step 2: details + the code
 router.post('/register', authLimiter, async (req, res) => {
-    const { name, phone, countryCode, email, password, otp } = req.body || {};
-    res.status(201).json(await auth.register({ name, phone, countryCode, email, password, otp }));
+    const { name, phone, countryCode, password, otp } = req.body || {}; // mobile number only (email is added in the profile)
+    res.status(201).json(await auth.register({ name, phone, countryCode, password, otp }));
 });
 
 router.post('/login', authLimiter, async (req, res) => {

@@ -86,21 +86,18 @@ const requestOtp = async ({ phone, countryCode }) => {
     return otp.issue(mobile);
 };
 
-const register = async ({ name: rawName, phone, countryCode, email, password, otp: code }) => {
+/** Sign up with a mobile number only. An email can be added later in the profile, then used to log in. */
+const register = async ({ name: rawName, phone, countryCode, password, otp: code }) => {
     const name = v.text(rawName, 'Full name', 'personName', { required: true });
     validatePassword(password);
     const mobile = cleanPhoneOrThrow(countryCode, phone);
     if (await User.exists(phoneQuery(mobile))) throw conflict('An account with this mobile number already exists');
-    if (email && (await User.exists({ email: String(email).toLowerCase() }))) {
-        throw conflict('An account with this email already exists');
-    }
     // Step 2: the number must be verified with the code we sent to it
     await otp.consume(mobile, code);
 
     const user = await User.create({
         name,
         ...mobile,
-        email: email || undefined,
         passwordHash: await bcrypt.hash(password, SALT_ROUNDS),
         role: ROLES.USER,
     });
@@ -108,10 +105,15 @@ const register = async ({ name: rawName, phone, countryCode, email, password, ot
 };
 
 /** Log in with mobile number (or email) and password. */
+let dummy;
+const dummyHash = async () => (dummy ||= await bcrypt.hash('not-a-real-password', SALT_ROUNDS));
+
 const login = async ({ phone, email, identifier, countryCode, password, ip }) => {
     const id = String(identifier || phone || email || '').trim();
-    if (!id || !password) throw badRequest('Mobile number and password are required');
+    if (!id || !password) throw badRequest('Mobile number (or email) and password are required');
+    if (id.length > 254) throw unauthorized('Wrong mobile number, email or password');
 
+    // An email (once added in the profile) or the registered mobile number
     const query = id.includes('@') ? { email: id.toLowerCase() } : phoneQuery(parseLoginPhone(id, countryCode));
     const user = await User.findOne(query).select('+passwordHash');
 
@@ -130,7 +132,9 @@ const login = async ({ phone, email, identifier, countryCode, password, ip }) =>
         }
     }
 
-    const ok = user && user.isActive && (await bcrypt.compare(String(password), user.passwordHash));
+    // Unknown accounts still run one password check, so the answer takes as long either way
+    // (otherwise the speed of the reply would tell which emails or numbers have an account)
+    const ok = user ? user.isActive && (await bcrypt.compare(String(password), user.passwordHash)) : await bcrypt.compare(String(password), await dummyHash()).then(() => false);
     if (!ok) {
         if (user) {
             const lockAt = new Date(Date.now() + LOCK_MINUTES * 60000);
@@ -167,7 +171,7 @@ const login = async ({ phone, email, identifier, countryCode, password, ip }) =>
             }
         }
         // Same message for unknown user and wrong password, so attackers cannot probe accounts
-        throw unauthorized('Invalid mobile number or password');
+        throw unauthorized('Wrong mobile number, email or password');
     }
     await LoginGuard.deleteMany({ userId: user._id, client: { $in: [client, '*'] } });
 
