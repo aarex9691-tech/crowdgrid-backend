@@ -824,6 +824,29 @@ async function main() {
         await expectError('Authority cannot reset a staff account at the help desk', () => helpdesk.reset(deskStaff, volunteerUser._id), 403, /pilgrim/);
         await expectError('Staff cannot reset their own password at the help desk', () => helpdesk.reset(deskStaff, deskUser._id), 403);
         check('Only the control room and volunteers can list SOS alerts (not NGO or corporate admins)', hasPermission('AUTHORITY', 'sos:view') && hasPermission('VOLUNTEER', 'sos:view') && !hasPermission('NGO_ADMIN', 'sos:view') && !hasPermission('CORPORATE_ADMIN', 'sos:view'));
+        {
+            // ---- Volunteer duties (control room) ----
+            const duties = require('../modules/volunteer/duty.service');
+            const { Duty } = require('../modules/volunteer/duty.model');
+            const amitRow = await User.findOne({ phone: '9000000005' }).lean();
+            const authRow = await User.findOne({ phone: '9000000002' }).lean();
+            const amit = { ...amitRow, id: String(amitRow._id) };
+            const desk = { ...authRow, id: String(authRow._id) };
+            const H = 3600000;
+            const sector = (await duties.sectorsFor(event._id))[0];
+            try {
+                await expectError('A shift cannot be given a start time hours in the past (a mistyped date)', () => duties.assign(desk, { eventId: String(event._id), volunteerId: String(amitRow._id), sector, post: 'flow-test', start: new Date(Date.now() - 3 * H).toISOString(), end: new Date(Date.now() + 2 * H).toISOString() }), 400, /past|already/i);
+                // a volunteer who never checked out: the shift ended hours ago
+                await Duty.create({ volunteerId: amitRow._id, eventId: event._id, sector, post: 'flow-test', start: new Date(Date.now() - 10 * H), end: new Date(Date.now() - 5 * H), status: 'ON_DUTY', checkedInAt: new Date(Date.now() - 10 * H) });
+                const my = await duties.mine(amit);
+                check('A shift that ended hours ago no longer shows as on duty', !my.duties.some((d) => d.post === 'flow-test'), my.duties.map((d) => `${d.post}:${d.status}`).join(', '));
+                const board = await duties.dashboard(String(event._id));
+                const amitOnBoard = (board.roster || board.volunteers || []).find((r) => r.id === String(amitRow._id));
+                check('The roster does not count them as on duty', amitOnBoard?.duty?.post !== 'flow-test', amitOnBoard?.status);
+            } finally {
+                await Duty.deleteMany({ volunteerId: amitRow._id, post: 'flow-test' });
+            }
+        }
         check('Only Authority and Super Admin can reset passwords', hasPermission('AUTHORITY', 'account:reset') && hasPermission('SUPER_ADMIN', 'account:reset') && !hasPermission('USER', 'account:reset') && !hasPermission('VOLUNTEER', 'account:reset'));
         const tokenBefore = (await auth.login({ identifier: PHONE, password: 'Crowd@123' })).token;
         const given = await helpdesk.reset(deskStaff, me._id);
