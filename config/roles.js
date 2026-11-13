@@ -50,6 +50,10 @@ const PERMISSIONS = Object.freeze({
     // Volunteering
     'volunteer:apply': [USER],
     'volunteer:review': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN],
+    // District control room: duties, live roster, coverage, broadcasts
+    'volunteer:manage': [SUPER_ADMIN, AUTHORITY],
+    // A volunteer's own shifts: check in and out
+    'duty:self': [VOLUNTEER],
 
     // SOS: anyone in trouble can raise one; staff see them according to scope
     'sos:create': ALL,

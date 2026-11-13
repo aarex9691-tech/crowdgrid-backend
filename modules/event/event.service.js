@@ -65,7 +65,34 @@ const list = async ({ kind } = {}) => {
     );
 };
 
-const get = async (idOrSlug) => (await findEvent(idOrSlug)).toObject();
+/**
+ * How many people are registered for an event, shown to pilgrims and visitors.
+ *   PUBLIC / CORPORATE: tickets issued (attendeesCount, kept exact when tickets are issued)
+ *   YATRA: accounts holding at least one stay, meal or shuttle pass that is not cancelled
+ *          (volunteer badges are not counted). Cached for a minute per event, so a busy yatra
+ *          page does not re-count every pass on every visit.
+ */
+const REGISTERED_TTL_MS = 60 * 1000;
+const registeredCache = new Map(); // eventId -> { n, at }
+const registeredCount = async (event) => {
+    if (event.kind !== 'YATRA') return event.attendeesCount || 0;
+    const key = String(event._id);
+    const hit = registeredCache.get(key);
+    if (hit && Date.now() - hit.at < REGISTERED_TTL_MS) return hit.n;
+    const [row] = await Pass.aggregate([
+        { $match: { eventId: event._id, status: { $ne: 'CANCELLED' }, type: { $ne: 'VOLUNTEER' } } },
+        { $group: { _id: '$userId' } },
+        { $count: 'n' },
+    ]);
+    const n = row?.n || 0;
+    registeredCache.set(key, { n, at: Date.now() });
+    return n;
+};
+
+const get = async (idOrSlug) => {
+    const event = (await findEvent(idOrSlug)).toObject();
+    return { ...event, registered: await registeredCount(event) };
+};
 
 const slugify = (s) =>
     String(s)
