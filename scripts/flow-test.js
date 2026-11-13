@@ -457,6 +457,7 @@ async function main() {
                 check('An organisation can apply to host both kinds of events', app1.status === 'PENDING' && app1.kind === 'BOTH' && app1.idNumber === 'C-12345' && !app1.document?.data, app1.status);
                 await expectError('Only one request can wait for review at a time', () => hostsSvc.apply(applicant, form, pdf), 409);
                 await expectError('Another account cannot apply with the same registration number', () => hostsSvc.apply(ramesh, { ...form, orgName: 'Flow Test Copycat', contactPhone: '9876500012' }, pdf), 409, /already/i);
+                await expectError('The same number cannot be sent again as a free-form registration number', () => hostsSvc.apply(ramesh, { ...form, orgName: 'Flow Test Copycat', contactPhone: '9876500012', idType: 'REG', idNumber: 'C 12345' }, pdf), 409, /already/i);
                 const mine = await hostsSvc.mine(applicant);
                 check('The applicant can see the status of their request', mine[0]?.status === 'PENDING' && mine[0]?.orgName === form.orgName);
 
@@ -485,6 +486,10 @@ async function main() {
                 check('Each host role covers only its own kind of event', hasPermission('EVENT_HOST', 'event:create:public') && !hasPermission('EVENT_HOST', 'event:create:corporate') && hasPermission('ORG_HOST', 'event:create:public') && hasPermission('ORG_HOST', 'event:create:corporate') && !hasPermission('CORPORATE_ADMIN', 'event:create:public'));
                 const otherTicket = await passes.scan(tPaid.passes[0].qr, orgHost);
                 check('A host\'s scanner refuses tickets for other organisers\' events', otherTicket.result === 'REJECTED' && otherTicket.reason === 'WRONG_EVENT' && (await Pass.findById(tPaid.passes[0]._id).lean()).status === 'ACTIVE', otherTicket.reason);
+                await expectError('A host cannot create a yatra hub', () => events.create({ kind: 'YATRA', title: 'Flow Test fake yatra', city: 'Nashik', isFlagship: true, startDate: start, endDate: new Date(start.getTime() + 86400e3) }, orgHost), 403);
+                const { qr: pilgrimQr } = await passes.myQr(user);
+                const elsewhere = await passes.scan(pilgrimQr, orgHost);
+                check('A host\'s scanner says nothing about a pilgrim\'s passes for other organisers or services', elsewhere.result === 'REJECTED' && elsewhere.reason === 'NO_VALID_PASS' && !elsewhere.pass, `${elsewhere.reason} ${elsewhere.message}`);
 
                 // A rejected organisation is told why, keeps a normal account, and can apply again
                 await auth.register({ name: 'Ravi Deshpande', phone: HP2, countryCode: '91', password: 'Crowd@123' });
@@ -659,6 +664,8 @@ async function main() {
         const publicView = await lostfound.list(null, { kind: 'MISSING' });
         const shown = publicView.find((r) => String(r._id) === String(rep._id));
         check('Phone numbers are hidden from the public bulletin', shown && !shown.contactPhone && !shown.personPhone);
+        const corpView = (await lostfound.list({ _id: new mongoose.Types.ObjectId(), role: 'CORPORATE_ADMIN' }, { kind: 'MISSING' })).find((r) => String(r._id) === String(rep._id));
+        check('Organisation hosts (corporate admins too) do not see phone numbers on missing reports', corpView && !corpView.contactPhone && !corpView.personPhone);
 
         // ---- 12. Team notes round 2: limit of 5, group passes, one QR, other yatras ----
         const transit = require('../modules/transit/transit.service');
