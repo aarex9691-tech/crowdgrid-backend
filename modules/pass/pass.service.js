@@ -203,10 +203,9 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     const filter = { userId: holder._id, status: 'ACTIVE', validFrom: { $lte: now }, validUntil: { $gte: now } };
     const types = SERVICE_TYPES[String(service).toUpperCase()] ?? null;
     if (types) filter.type = { $in: types };
-    if (HOST_PASS_TYPES[scanner.role]) {
-        filter.type = { $in: HOST_PASS_TYPES[scanner.role] };
-        filter.eventId = { $in: await ownEventIds(scanner) };
-    }
+    // a host's desk only ever looks at tickets for its own events
+    const hostScope = HOST_PASS_TYPES[scanner.role] ? { type: { $in: HOST_PASS_TYPES[scanner.role] }, eventId: { $in: await ownEventIds(scanner) } } : null;
+    if (hostScope) Object.assign(filter, hostScope);
     // NGO admins and NGO volunteers only redeem passes for their own camps / kitchens (or passes with no provider)
     if (scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId)) {
         filter.$or = [{ providerId: scanner.providerId || null }, { providerId: null }, { providerId: { $exists: false } }];
@@ -218,7 +217,7 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
         if (!candidates.length) return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'That pass is no longer valid', holder: person };
     }
     if (!candidates.length) {
-        return { ...(await whyNothingHere(holder._id, types, now)), holder: person, personal: true };
+        return { ...(await whyNothingHere(holder._id, types, now, hostScope)), holder: person, personal: true };
     }
     if (candidates.length > 1) {
         return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary), personal: true, staticQr: isStatic };
@@ -236,9 +235,10 @@ const TYPE_WORD = { LODGING: 'stay', MEAL: 'meal token', TRANSIT: 'bus pass', PU
  * not valid yet) instead of a bare "no pass", looking at this person's passes
  * for this counter from the last day and the coming days.
  */
-const whyNothingHere = async (userId, types, now) => {
+const whyNothingHere = async (userId, types, now, scope = null) => {
     const near = { userId, validUntil: { $gte: new Date(now.getTime() - 86400000) } };
     if (types) near.type = { $in: types };
+    if (scope) Object.assign(near, scope);
     const passes = await Pass.find(near).sort({ updatedAt: -1 }).limit(20).lean();
     const word = (p) => TYPE_WORD[p.type] || 'pass';
     const cancelled = passes.find((p) => p.status === 'CANCELLED');

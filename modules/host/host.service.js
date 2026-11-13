@@ -71,7 +71,7 @@ const apply = async (user, body = {}, file = null) => {
     const idType = pick(body.idType, ID_TYPES, 'Choose the type of registration number');
     const idNumber = orgIds.normalise(idType, body.idNumber);
     const idCheck = orgIds.check(idType, idNumber);
-    if (!idNumber) throw badRequest('Enter the registration number');
+    if (!idNumber || !/[A-Z0-9]/i.test(idNumber)) throw badRequest('Enter the registration number');
     if (idCheck.status === 'INVALID') throw badRequest(`That ${idCheck.label} is not valid. Copy it exactly from the certificate.`);
     const city = v.text(body.city, 'City', 'city', { required: true });
     const contactName = v.text(body.contactName, 'Contact person', 'personName', { required: true });
@@ -106,7 +106,8 @@ const apply = async (user, body = {}, file = null) => {
             description,
             document: { data: file, contentType, size: file.length },
             pendingFor: user._id,
-            activeIdKey: `${idType}:${idNumber}`,
+            // the same number counts once, whatever type or punctuation it was sent with
+            activeIdKey: idNumber.replace(/[^A-Z0-9]/gi, '').toUpperCase(),
         });
         audit.record({ actor: user, action: 'HOST_APPLIED', targetType: 'HostApplication', targetId: app._id, summary: `${user.name} asked to host ${kind === 'BOTH' ? 'public and campus' : kind.toLowerCase()} events for ${orgName}` });
         return withoutFile(app);
@@ -172,6 +173,17 @@ const decide = async (id, reviewer, { decision, note, reason } = {}) => {
     }
 
     const result = await withTransaction(async (session) => {
+        // The account changes first, and only if it is still a plain pilgrim account; then the request
+        // is closed. Without transactions (a standalone database) a failed second step undoes the first,
+        // so a request is never left approved for an account that did not become a host.
+        if (decision === 'APPROVED') {
+            const done = await User.updateOne(
+                { _id: current.applicantId, role: ROLES.USER },
+                { $set: { role: ROLE_FOR[current.kind], organisationName: current.orgName } },
+                { session }
+            );
+            if (!done.modifiedCount) throw conflict('This account changed role meanwhile. Refresh and try again.');
+        }
         const app = await HostApplication.findOneAndUpdate(
             { _id: id, status: 'PENDING' },
             {
@@ -181,14 +193,11 @@ const decide = async (id, reviewer, { decision, note, reason } = {}) => {
             },
             { returnDocument: 'after', session }
         );
-        if (!app) throw conflict('This request was already reviewed');
-        if (decision === 'APPROVED') {
-            const done = await User.updateOne(
-                { _id: app.applicantId, role: ROLES.USER },
-                { $set: { role: ROLE_FOR[app.kind], organisationName: app.orgName } },
-                { session }
-            );
-            if (!done.modifiedCount) throw conflict('This account changed role meanwhile. Refresh and try again.');
+        if (!app) {
+            if (decision === 'APPROVED' && !session) {
+                await User.updateOne({ _id: current.applicantId, role: ROLE_FOR[current.kind] }, { $set: { role: ROLES.USER }, $unset: { organisationName: 1 } });
+            }
+            throw conflict('This request was already reviewed');
         }
         return app.toObject();
     });

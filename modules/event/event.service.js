@@ -103,7 +103,8 @@ const slugify = (s) =>
         .slice(0, 60);
 
 const assertCanManageKind = (user, kind) => {
-    const perm = kind === 'CORPORATE' ? 'event:create:corporate' : 'event:create:public';
+    // Yatra hubs are official: only the platform's own staff create them, never an organisation host
+    const perm = kind === 'CORPORATE' ? 'event:create:corporate' : kind === 'YATRA' ? 'event:create:yatra' : 'event:create:public';
     if (!hasPermission(user.role, perm)) throw forbidden(`Your role cannot manage ${kind.toLowerCase()} events`);
 };
 

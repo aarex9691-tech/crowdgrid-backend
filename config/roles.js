@@ -19,9 +19,10 @@ const ROLES = Object.freeze({
 
 const { SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, VOLUNTEER, USER } = ROLES;
 const ALL = Object.values(ROLES);
-// Staff of the yatras (they may see contact numbers on missing-person reports). Organisation hosts are
-// not: they run their own events and have no business with pilgrims' private details.
-const STAFF = [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, NGO_ADMIN, VOLUNTEER];
+// Staff of the yatras (they may see contact numbers on missing-person reports). Organisation hosts
+// (corporate admins included, since anyone verified can become one) are not: they run their own
+// events and have no business with pilgrims' private details.
+const STAFF = [SUPER_ADMIN, AUTHORITY, NGO_ADMIN, VOLUNTEER];
 /** Organisations that run their own events (each manages and scans only its own). */
 const HOST_ROLES = [CORPORATE_ADMIN, EVENT_HOST, ORG_HOST];
 
@@ -37,7 +38,9 @@ const PERMISSIONS = Object.freeze({
     'provider:verify': [SUPER_ADMIN, AUTHORITY],
     'provider:apply': [USER],
 
-    // Create public / religious event hubs
+    // Create the official yatra hubs (never organisation hosts)
+    'event:create:yatra': [SUPER_ADMIN, AUTHORITY],
+    // Create public event hubs
     'event:create:public': [SUPER_ADMIN, AUTHORITY, EVENT_HOST, ORG_HOST],
     // Create & manage corporate events
     'event:create:corporate': [SUPER_ADMIN, CORPORATE_ADMIN, ORG_HOST],

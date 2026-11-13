@@ -6,7 +6,7 @@ const { requireAuth, requirePermission } = require('../../middleware/auth');
 const router = express.Router();
 
 // The registration certificate comes as a file upload (field "document"); the other fields as text
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: hosts.MAX_DOCUMENT_BYTES, files: 1, fields: 20 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: hosts.MAX_DOCUMENT_BYTES, files: 1, fields: 20, fieldSize: 10 * 1024, parts: 25 } });
 const oneDocument = (req, res, next) =>
     upload.single('document')(req, res, (err) => {
         if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ message: 'The certificate is too large. Use a file under 2 MB.' });
