@@ -214,8 +214,8 @@ const logoutAll = async (user) => {
 };
 
 /** Super Admin creates staff accounts (Authority, Corporate Admin, Volunteer, Super Admin). */
-const createStaff = async ({ name, phone, countryCode, email, password, role, providerId }, actor) => {
-    const allowed = [ROLES.SUPER_ADMIN, ROLES.AUTHORITY, ROLES.CORPORATE_ADMIN, ROLES.VOLUNTEER, ROLES.NGO_ADMIN];
+const createStaff = async ({ name, phone, countryCode, email, password, role, providerId, organisationName }, actor) => {
+    const allowed = [ROLES.SUPER_ADMIN, ROLES.AUTHORITY, ROLES.CORPORATE_ADMIN, ROLES.EVENT_HOST, ROLES.ORG_HOST, ROLES.VOLUNTEER, ROLES.NGO_ADMIN];
     if (!allowed.includes(role)) throw badRequest(`Role must be one of ${allowed.join(', ')}`);
     validatePassword(password);
     const mobile = cleanPhoneOrThrow(countryCode, phone);
@@ -227,6 +227,8 @@ const createStaff = async ({ name, phone, countryCode, email, password, role, pr
         passwordHash: await bcrypt.hash(password, SALT_ROUNDS),
         role,
         providerId: providerId || null,
+        // event hosts made directly by the Super Admin carry their organisation's name (shown on their events)
+        ...([ROLES.CORPORATE_ADMIN, ROLES.EVENT_HOST, ROLES.ORG_HOST].includes(role) && organisationName ? { organisationName: v.text(organisationName, 'Organisation name', 'orgName', { required: true }) } : {}),
     });
     audit.record({ actor, action: 'STAFF_CREATED', targetType: 'User', targetId: user._id, summary: `${actor?.name || 'Admin'} created ${role} account for ${user.name}` });
     return user.toPublic();

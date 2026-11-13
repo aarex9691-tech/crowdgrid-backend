@@ -7,7 +7,8 @@ const nightsLib = require('../lodging/nights');
 const { Lodging } = require('../lodging/lodging.model');
 const { Pass } = require('../pass/pass.model');
 const { issuePass, toClient } = require('../pass/pass.service');
-const { hasPermission, ROLES } = require('../../config/roles');
+const { hasPermission, ROLES, HOST_ROLES } = require('../../config/roles');
+const User = require('../auth/user.model');
 const audit = require('../audit/audit.service');
 const { HttpError, badRequest, forbidden, notFound, conflict } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
@@ -199,6 +200,14 @@ const create = async (body, user) => {
     }
     data.slug = `${slugify(data.title || 'event')}-${crypto.randomBytes(3).toString('hex')}`;
     data.organizerId = user._id;
+    // An approved host's events show its organisation and a "Verified organiser" badge
+    if (HOST_ROLES.includes(user.role)) {
+        const org = (await User.findById(user._id, 'organisationName').lean())?.organisationName;
+        if (org) {
+            data.organiserName = org;
+            data.organiserVerified = true;
+        }
+    }
     const event = await Event.create(data);
     const out = event.toObject();
     audit.record({ actor: user, action: 'EVENT_CREATED', targetType: 'Event', targetId: event._id, summary: `${user.name} created ${data.kind.toLowerCase()} event "${event.title}"` });

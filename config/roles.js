@@ -1,7 +1,7 @@
 /**
  * Role-Based Access Control.
  *
- * ROLES are the six account types. PERMISSIONS maps each capability from the
+ * ROLES are the account types. PERMISSIONS maps each capability from the
  * CrowdGrid access matrix to the roles allowed to use it. Routes check a
  * permission (not a role), so changing who can do what only means editing
  * this file.
@@ -9,15 +9,21 @@
 const ROLES = Object.freeze({
     SUPER_ADMIN: 'SUPER_ADMIN',
     AUTHORITY: 'AUTHORITY', // District / Government authority
-    CORPORATE_ADMIN: 'CORPORATE_ADMIN', // Corporate proxy admin
+    CORPORATE_ADMIN: 'CORPORATE_ADMIN', // Corporate proxy admin: campus & corporate events
+    EVENT_HOST: 'EVENT_HOST', // verified organisation that hosts public events (concerts, aartis, walks)
+    ORG_HOST: 'ORG_HOST', // verified organisation that hosts both (colleges, charities...)
     NGO_ADMIN: 'NGO_ADMIN', // NGO / Seva trust manager
     VOLUNTEER: 'VOLUNTEER', // Ground volunteer / marshal
     USER: 'USER', // Pilgrim / Attendee (everyone starts here)
 });
 
-const { SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, NGO_ADMIN, VOLUNTEER, USER } = ROLES;
+const { SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, VOLUNTEER, USER } = ROLES;
 const ALL = Object.values(ROLES);
+// Staff of the yatras (they may see contact numbers on missing-person reports). Organisation hosts are
+// not: they run their own events and have no business with pilgrims' private details.
 const STAFF = [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, NGO_ADMIN, VOLUNTEER];
+/** Organisations that run their own events (each manages and scans only its own). */
+const HOST_ROLES = [CORPORATE_ADMIN, EVENT_HOST, ORG_HOST];
 
 const PERMISSIONS = Object.freeze({
     // Global platform config & approvals
@@ -32,16 +38,20 @@ const PERMISSIONS = Object.freeze({
     'provider:apply': [USER],
 
     // Create public / religious event hubs
-    'event:create:public': [SUPER_ADMIN, AUTHORITY],
+    'event:create:public': [SUPER_ADMIN, AUTHORITY, EVENT_HOST, ORG_HOST],
     // Create & manage corporate events
-    'event:create:corporate': [SUPER_ADMIN, CORPORATE_ADMIN],
+    'event:create:corporate': [SUPER_ADMIN, CORPORATE_ADMIN, ORG_HOST],
+
+    // Organisations ask to host events; the Super Admin verifies them
+    'host:apply': [USER],
+    'host:review': [SUPER_ADMIN],
 
     // Manage lodging / food inventory (NGO limited to its own NGO in the service)
     'inventory:manage': [SUPER_ADMIN, NGO_ADMIN],
     'inventory:view': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN],
 
     // Scan QR entry / meal tokens
-    'pass:scan': [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, NGO_ADMIN, VOLUNTEER],
+    'pass:scan': [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, VOLUNTEER],
 
     // Book lodging / food passes / tickets: pilgrims and attendees only.
     // Admins and hosts run the event; they use their own dashboards and never book.
@@ -80,4 +90,4 @@ const hasPermission = (role, permission) => {
     return allowed.includes(role);
 };
 
-module.exports = { ROLES, PERMISSIONS, STAFF, hasPermission };
+module.exports = { ROLES, PERMISSIONS, STAFF, HOST_ROLES, hasPermission };

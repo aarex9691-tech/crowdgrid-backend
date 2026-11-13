@@ -19,6 +19,7 @@ const userSchema = new mongoose.Schema(
         role: { type: String, enum: Object.values(ROLES), default: ROLES.USER },
         // NGO admins and volunteers belong to a service provider (NGO / trust)
         providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider' }, // only for NGO staff
+        organisationName: { type: String, trim: true, maxlength: 120 }, // verified organisation of an event host
         // Optional profile, filled in from "Edit profile" (empty values are not stored)
         dateOfBirth: Date,
         gender: { type: String, enum: ['FEMALE', 'MALE', 'OTHER'] },
@@ -55,6 +56,7 @@ userSchema.methods.toPublic = function toPublic() {
         email: this.email,
         role: this.role,
         providerId: this.providerId,
+        organisationName: this.organisationName,
         dateOfBirth: this.dateOfBirth,
         gender: this.gender,
         city: this.city,

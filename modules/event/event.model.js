@@ -56,6 +56,9 @@ const eventSchema = new mongoose.Schema(
         sessions: { type: [sessionSchema], default: undefined },
 
         organizerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        // Events run by a verified organisation (an approved host) carry its name and a badge
+        organiserName: { type: String, maxlength: 120 },
+        organiserVerified: { type: Boolean },
         status: { type: String, enum: ['ACTIVE', 'ARCHIVED'], default: 'ACTIVE' },
     },
     { timestamps: true }

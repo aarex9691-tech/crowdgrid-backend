@@ -85,6 +85,9 @@ const scanPass = async (qr, scanner, opts = {}) => {
 };
 
 /** Events this corporate admin organises (their desk may only check badges for these). */
+/** The pass types each organisation host may check in: its own kind of event only. */
+const HOST_PASS_TYPES = { [ROLES.CORPORATE_ADMIN]: ['CORPORATE'], [ROLES.EVENT_HOST]: ['PUBLIC'], [ROLES.ORG_HOST]: ['PUBLIC', 'CORPORATE'] };
+
 const ownEventIds = async (scanner) => (await Event.find({ organizerId: scanner._id }).select('_id').lean()).map((e) => String(e._id));
 
 /**
@@ -99,12 +102,14 @@ const scopeError = async (pass, scanner) => {
     if (servesNgo && pass.providerId && String(pass.providerId) !== String(scanner.providerId)) {
         return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
     }
-    if (scanner.role === ROLES.CORPORATE_ADMIN) {
-        if (pass.type !== 'CORPORATE') {
-            return { result: 'REJECTED', reason: 'WRONG_SERVICE', message: 'This desk checks event badges only. Send them to the right counter.', pass: summary(pass) };
+    const hostTypes = HOST_PASS_TYPES[scanner.role];
+    if (hostTypes) {
+        // organisation hosts check in their own events only: tickets / badges, never stays, meals or buses
+        if (!hostTypes.includes(pass.type)) {
+            return { result: 'REJECTED', reason: 'WRONG_SERVICE', message: 'This desk checks event entry only. Send them to the right counter.', pass: summary(pass) };
         }
         if (!(await Event.exists({ _id: pass.eventId, organizerId: scanner._id }))) {
-            return { result: 'REJECTED', reason: 'WRONG_EVENT', message: 'This badge is for another organiser\'s event', pass: summary(pass) };
+            return { result: 'REJECTED', reason: 'WRONG_EVENT', message: 'This pass is for another organiser\'s event', pass: summary(pass) };
         }
     }
     return null;
@@ -198,8 +203,8 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     const filter = { userId: holder._id, status: 'ACTIVE', validFrom: { $lte: now }, validUntil: { $gte: now } };
     const types = SERVICE_TYPES[String(service).toUpperCase()] ?? null;
     if (types) filter.type = { $in: types };
-    if (scanner.role === ROLES.CORPORATE_ADMIN) {
-        filter.type = { $in: ['CORPORATE'] };
+    if (HOST_PASS_TYPES[scanner.role]) {
+        filter.type = { $in: HOST_PASS_TYPES[scanner.role] };
         filter.eventId = { $in: await ownEventIds(scanner) };
     }
     // NGO admins and NGO volunteers only redeem passes for their own camps / kitchens (or passes with no provider)
