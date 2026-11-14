@@ -52,11 +52,12 @@ const apply = async (user, body = {}, file = null) => {
     const days = [...new Set((dates || []).map((d) => String(d)))].slice(0, 30);
     for (const d of days) eventWindow.assertDay(event, d);
     days.sort();
+    if (providerId !== undefined && providerId !== '' && (typeof providerId !== 'string' || !mongoose.isValidObjectId(providerId))) throw badRequest('Choose a verified trust for this event');
     if (providerId && !(await Provider.exists({ _id: providerId, eventId: event._id, verificationStatus: 'VERIFIED' }))) {
         throw badRequest('Choose a verified trust for this event');
     }
     // Photo ID: the type, the last 4 characters only, and a photo of the card
-    if (!ID_TYPES[idType]) throw badRequest('Choose the ID you will show (Aadhaar, voter ID, driving licence...)');
+    if (typeof idType !== 'string' || !Object.hasOwn(ID_TYPES, idType)) throw badRequest('Choose the ID you will show (Aadhaar, voter ID, driving licence...)');
     const last4 = String(idLast4 ?? '').replace(/\s+/g, '').toUpperCase();
     if (!/^[A-Z0-9]{4}$/.test(last4)) throw badRequest('Enter only the last 4 characters of your ID number');
     if (!file || !file.length) throw badRequest('Add a photo of your ID card');
@@ -103,6 +104,10 @@ const listForReview = async (reviewer, { status, eventId } = {}) => {
         .limit(200)
         .lean();
     const now = Date.now();
+    // Trusts see who chose them, never the ID details (only the control room checks IDs)
+    if (reviewer.role === ROLES.NGO_ADMIN) {
+        return rows.map(({ idType, idLast4, idDocument, ...a }) => ({ ...a, checks: { idVerified: Boolean(a.idVerifiedAt) } }));
+    }
     return rows.map((a) => ({
         ...withoutCard(a),
         // what the control room should look at before approving

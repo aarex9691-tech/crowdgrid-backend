@@ -61,7 +61,7 @@ router.post('/:id/register', requireAuth, requirePermission('booking:create'), a
 });
 
 router.post('/:id/corporate/verify', requireAuth, codeAttempts, async (req, res) => {
-    res.json(await events.verifyCorporateCode(req.params.id, req.body && req.body.code));
+    res.json(await events.verifyCorporateCode(req.params.id, req.body && req.body.code, req.user));
 });
 
 router.post('/:id/corporate/badge', requireAuth, requirePermission('booking:create'), codeAttempts, async (req, res) => {

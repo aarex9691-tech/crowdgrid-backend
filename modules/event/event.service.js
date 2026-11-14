@@ -304,7 +304,11 @@ const addInvitees = async (eventId, user, { entries } = {}) => {
         fresh.push({ ...parsed, addedAt: new Date() });
     }
     if ((event.invitees?.length || 0) + fresh.length > MAX_INVITEES) throw badRequest(`An event can have at most ${MAX_INVITEES} invited people`);
-    if (fresh.length) await Event.updateOne({ _id: event._id }, { $push: { invitees: { $each: fresh } } });
+    if (fresh.length) {
+        // only if the list still has room (two organisers adding at once cannot pass the limit)
+        const room = await Event.updateOne({ _id: event._id, [`invitees.${MAX_INVITEES - fresh.length}`]: { $exists: false } }, { $push: { invitees: { $each: fresh } } });
+        if (!room.modifiedCount) throw badRequest(`An event can have at most ${MAX_INVITEES} invited people`);
+    }
     if (fresh.length) audit.record({ actor: user, action: 'INVITEES_ADDED', targetType: 'Event', targetId: event._id, summary: `${user.name} invited ${fresh.length} people to "${event.title}"` });
     return { added: fresh.length, skipped, invitees: (event.invitees?.length || 0) + fresh.length };
 };
@@ -315,14 +319,33 @@ const removeInvitee = async (eventId, user, { contact } = {}) => {
     const target = parseInvitee(contact);
     if (!target) throw badRequest('Choose an invited mobile number or email');
     const key = contactOf(target);
-    const left = (event.invitees || []).filter((i) => contactOf(i) !== key);
-    await Event.updateOne({ _id: event._id }, { $set: { invitees: left } });
-    return { invitees: left.length };
+    // removed in place, so an invitation added at the same moment is never lost
+    const match = target.email ? { email: target.email } : { phone: target.phone };
+    await Event.updateOne({ _id: event._id }, { $pull: { invitees: match } });
+    const after = await Event.findById(event._id, '+invitees').lean();
+    return { invitees: after?.invitees?.length || 0, removed: key };
 };
 
 /** Is this account on the event's invite list? (by its mobile number or its profile email) */
+const samePhone = (i, u) => Boolean(i.phone && u?.phone && i.phone === u.phone && (i.countryCode || '91') === (u.countryCode || '91'));
+/**
+ * Is this account on the invite list? A mobile number is proof (it was confirmed at sign-up and cannot
+ * be edited). A profile email is not verified, so it only counts if the account already had it when
+ * the invitation was added: typing someone else's address onto a profile afterwards gains nothing.
+ */
 const isInvited = (event, user) =>
-    (event.invitees || []).some((i) => (i.phone && i.phone === user.phone && (i.countryCode || '91') === (user.countryCode || '91')) || (i.email && user.email && i.email === String(user.email).toLowerCase()));
+    (event.invitees || []).some((i) => {
+        if (samePhone(i, user)) return true;
+        if (!i.email || !user.email || i.email !== String(user.email).toLowerCase()) return false;
+        const invitedAt = new Date(i.addedAt || 0).getTime();
+        return !(user.emailChangesAt || []).some((d) => new Date(d).getTime() > invitedAt);
+    });
+
+const assertInvited = async (eventId, user) => {
+    const withList = await Event.findById(eventId, '+invitees').lean();
+    const account = await User.findById(user._id, 'phone countryCode email +emailChangesAt').lean();
+    if (!isInvited(withList, account || user)) throw forbidden('You are not on the invitation list for this event. Ask the organiser to invite your mobile number or email.');
+};
 
 /** Organiser or Super Admin: everyone invited, who has claimed a badge (and sessions), who checked in. */
 const corporateAttendees = async (eventId, user) => {
@@ -345,7 +368,7 @@ const corporateAttendees = async (eventId, user) => {
     }));
     // invited people who have not claimed a badge yet
     for (const i of event.invitees || []) {
-        const claimedBy = rows.find((r) => r._match && ((i.phone && r._match.phone === i.phone) || (i.email && String(r._match.email || '').toLowerCase() === i.email)));
+        const claimedBy = rows.find((r) => r._match && (samePhone(i, r._match) || (i.email && String(r._match.email || '').toLowerCase() === i.email)));
         if (claimedBy) claimedBy.invited = contactOf(i);
         else rows.push({ _id: `invite:${contactOf(i)}`, contact: contactOf(i), invited: contactOf(i), claimed: false, checkedIn: false, sessions: [] });
     }
@@ -358,7 +381,7 @@ const publicAttendees = async (eventId, user) => {
     if (event.kind !== 'PUBLIC') throw badRequest('Not a public event');
     assertCanManageKind(user, event.kind);
     assertOwnerOrAdmin(event, user);
-    const passes = await Pass.find({ eventId: event._id, type: 'PUBLIC' }).populate('userId', 'name countryCode phone').sort({ createdAt: -1 }).limit(2000).lean();
+    const passes = await Pass.find({ eventId: event._id, type: 'PUBLIC' }).populate('userId', 'name countryCode phone').sort({ createdAt: -1 }).limit(10000).lean();
     return passes.map((p) => ({
         _id: p._id,
         name: p.userId?.name,
@@ -596,8 +619,10 @@ const checkCode = async (eventId, code) => {
 };
 
 /** Step 1 of the corporate flow: verify the 6-digit code, reveal the session list. */
-const verifyCorporateCode = async (eventId, code) => {
+const verifyCorporateCode = async (eventId, code, user = null) => {
     const event = await checkCode(eventId, code);
+    // say so at once if this account is not invited, before it picks sessions
+    if (user) await assertInvited(event._id, user);
     return { eventId: event._id, title: event.title, companyName: event.companyName, sessions: event.sessions };
 };
 
@@ -605,9 +630,7 @@ const verifyCorporateCode = async (eventId, code) => {
 const claimCorporateBadge = async (eventId, user, { code, sessions = [] }) => {
     const event = await checkCode(eventId, code);
     // Campus and corporate events are for invited people only (the code alone is not enough)
-    const withList = await Event.findById(event._id, '+invitees').lean();
-    const account = await User.findById(user._id, 'phone countryCode email').lean();
-    if (!isInvited(withList, account || user)) throw forbidden('You are not on the invitation list for this event. Ask the organiser to invite your mobile number or email.');
+    await assertInvited(event._id, user);
     const valid = new Set(event.sessions.map((s) => s.code));
     const chosen = [...new Set((Array.isArray(sessions) ? sessions : []).map(String))].filter((c) => valid.has(c));
     if (!chosen.length) throw badRequest('Pick at least one session');
