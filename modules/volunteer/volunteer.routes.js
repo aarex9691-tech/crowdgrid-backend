@@ -28,6 +28,7 @@ router.get('/applications', requireAuth, requirePermission('volunteer:list'), as
         await volunteer.listForReview(req.user, {
             status: req.query.status && String(req.query.status),
             eventId: req.query.eventId && String(req.query.eventId),
+            idVerified: req.query.idVerified && String(req.query.idVerified),
         })
     );
 });

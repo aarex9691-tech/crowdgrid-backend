@@ -88,9 +88,11 @@ const mine = async (userId) =>
     VolunteerApplication.find({ userId }).populate('eventId', 'title city').populate('providerId', 'name').sort({ createdAt: -1 }).lean();
 
 /** Review queue. NGO admins only see applications made to their own trust. */
-const listForReview = async (reviewer, { status, eventId } = {}) => {
+const listForReview = async (reviewer, { status, eventId, idVerified } = {}) => {
     const filter = {};
     if (status) filter.status = String(status);
+    // the in-person ID check queue: approved volunteers whose card nobody has seen yet
+    if (idVerified === 'false') filter.idVerifiedAt = null;
     if (eventId && mongoose.isValidObjectId(eventId)) filter.eventId = eventId;
     if (reviewer.role === ROLES.NGO_ADMIN) {
         if (!reviewer.providerId) return [];
