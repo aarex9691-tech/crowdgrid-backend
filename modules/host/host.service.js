@@ -119,7 +119,9 @@ const apply = async (user, body = {}, file = null) => {
 };
 
 /** The applicant's own requests, newest first (status, and the reason if rejected). */
-const mine = async (user) => (await HostApplication.find({ applicantId: user._id }).sort({ createdAt: -1 }).limit(20).lean()).map(withoutFile);
+// The applicant sees the decision and a rejection's reason; the reviewer's note and name stay internal
+const mine = async (user) =>
+    (await HostApplication.find({ applicantId: user._id }, '-reviewNote -reviewedBy').sort({ createdAt: -1 }).limit(20).lean()).map(withoutFile);
 
 /** What the reviewer should look at, worked out from the request. */
 const checksFor = async (app, applicant) => {
@@ -184,19 +186,30 @@ const decide = async (id, reviewer, { decision, note, reason } = {}) => {
             );
             if (!done.modifiedCount) throw conflict('This account changed role meanwhile. Refresh and try again.');
         }
-        const app = await HostApplication.findOneAndUpdate(
-            { _id: id, status: 'PENDING' },
-            {
-                $set: { status: decision, reviewedBy: reviewer._id, reviewedAt: new Date(), ...(reviewNote ? { reviewNote } : {}), ...(rejectionReason ? { rejectionReason } : {}) },
-                // a rejected organisation may apply again (same number); an approved one keeps its number
-                $unset: decision === 'REJECTED' ? { pendingFor: 1, activeIdKey: 1 } : { pendingFor: 1 },
-            },
-            { returnDocument: 'after', session }
-        );
+        // On a standalone database the account change above is undone if closing the request fails in any way
+        const undoPromotion = async () => {
+            if (decision !== 'APPROVED' || session) return;
+            await User.updateOne({ _id: current.applicantId, role: ROLE_FOR[current.kind] }, { $set: { role: ROLES.USER }, $unset: { organisationName: 1 } }).catch((undoErr) =>
+                console.error(`[hosts] could not undo the host role for user ${current.applicantId} after a failed approval:`, undoErr.message)
+            );
+        };
+        let app;
+        try {
+            app = await HostApplication.findOneAndUpdate(
+                { _id: id, status: 'PENDING' },
+                {
+                    $set: { status: decision, reviewedBy: reviewer._id, reviewedAt: new Date(), ...(reviewNote ? { reviewNote } : {}), ...(rejectionReason ? { rejectionReason } : {}) },
+                    // a rejected organisation may apply again (same number); an approved one keeps its number
+                    $unset: decision === 'REJECTED' ? { pendingFor: 1, activeIdKey: 1 } : { pendingFor: 1 },
+                },
+                { returnDocument: 'after', session }
+            );
+        } catch (err) {
+            await undoPromotion();
+            throw err;
+        }
         if (!app) {
-            if (decision === 'APPROVED' && !session) {
-                await User.updateOne({ _id: current.applicantId, role: ROLE_FOR[current.kind] }, { $set: { role: ROLES.USER }, $unset: { organisationName: 1 } });
-            }
+            await undoPromotion();
             throw conflict('This request was already reviewed');
         }
         return app.toObject();

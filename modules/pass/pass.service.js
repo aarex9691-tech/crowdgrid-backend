@@ -217,7 +217,10 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
         if (!candidates.length) return { result: 'REJECTED', reason: 'NOT_FOUND', message: 'That pass is no longer valid', holder: person };
     }
     if (!candidates.length) {
-        return { ...(await whyNothingHere(holder._id, types, now, hostScope)), holder: person, personal: true };
+        const why = await whyNothingHere(holder._id, types, now, hostScope);
+        // a host's desk is told nothing about someone who has no ticket for its own events
+        if (hostScope && why.reason === 'NO_VALID_PASS') return { ...why, message: 'No ticket for your events', personal: true };
+        return { ...why, holder: person, personal: true };
     }
     if (candidates.length > 1) {
         return { result: 'CHOOSE', message: `${holder.name} has ${candidates.length} valid passes here. Choose one.`, holder: person, options: candidates.map(summary), personal: true, staticQr: isStatic };
