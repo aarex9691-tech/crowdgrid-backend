@@ -26,6 +26,7 @@ const TransitRoute = require('../modules/transit/transit.model');
 const { LaneStatus } = require('../modules/route/lane.model');
 const { SEED_STATUS } = require('../modules/route/network.nashik');
 const { VolunteerApplication } = require('../modules/volunteer/volunteer.model');
+const { HostApplication } = require('../modules/host/host.model');
 const SosIncident = require('../modules/sos/sos.model');
 const LostFoundReport = require('../modules/lostfound/lostfound.model');
 const { Photo: LostFoundPhoto } = require('../modules/lostfound/photo.model');
@@ -58,7 +59,7 @@ async function main() {
     await require('../utils/dns').connectMongo(mongoose, uri);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus, TransitRoute.TransitDay];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus, TransitRoute.TransitDay, HostApplication];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
@@ -73,7 +74,7 @@ async function main() {
         mk('Platform Super Admin', '9000000001', 'SUPER_ADMIN', { email: 'admin@crowdgrid.test' }),
         mk('District Control Room, Nashik', '9000000002', 'AUTHORITY'),
         mk('Sanjay Kulkarni', '9000000003', 'NGO_ADMIN'),
-        mk('Priya Menon', '9000000004', 'CORPORATE_ADMIN'),
+        mk('Priya Menon', '9000000004', 'CORPORATE_ADMIN', { organisationName: 'Sahyadri Infra Pvt Ltd' }),
         mk('Amit Jadhav', '9000000005', 'VOLUNTEER'),
         mk('Ramesh Patil', '9000000006', 'USER'),
         mk('Sunita Deshmukh', '9000000007', 'USER'),
@@ -507,7 +508,88 @@ async function main() {
             { code: 'WORKSHOP', title: 'Workshop: Crowd-flow modelling', kind: 'SESSION', time: '15:00' },
         ],
         organizerId: corporateAdmin._id,
+        organiserName: 'Sahyadri Infra Pvt Ltd',
+        organiserVerified: true,
     });
+
+    // ---------- Organisations hosting their own events (verified by the Super Admin) ----------
+    // An Event Host (public events), an Organisation Host (public + campus events), one request
+    // waiting in the Super Admin's queue and one that was not approved (the applicant sees why).
+    const monthAgo = new Date(Date.now() - 40 * 86400000);
+    const [eventHost, orgHost, hostApplicant, hostRejected] = await User.insertMany([
+        mk('Kavita Joshi', '9000000010', 'EVENT_HOST', { organisationName: 'Nashik Sanskriti Manch', createdAt: monthAgo }),
+        mk('Dr. Anil Gaikwad', '9000000011', 'ORG_HOST', { organisationName: 'Godavari College of Arts and Science', createdAt: monthAgo }),
+        mk('Sister Mary Thomas', '9000000012', 'USER', { createdAt: monthAgo }),
+        mk('Vikram Shinde', '9000000013', 'USER'),
+    ]);
+    const certificate = demoCertificate();
+    const hostApp = (o) => ({
+        contactCountryCode: '91',
+        document: { data: certificate, contentType: 'application/pdf', size: certificate.length },
+        ...o,
+    });
+    await HostApplication.insertMany([
+        hostApp({
+            applicantId: eventHost._id, kind: 'PUBLIC', orgName: 'Nashik Sanskriti Manch', orgType: 'CULTURAL',
+            idType: 'REG', idNumber: 'MAH/NSK/1442/2009', idCheck: 'UNCHECKED', city: 'Nashik',
+            contactName: 'Kavita Joshi', contactPhone: '9000000010', contactEmail: 'kavita@sanskritimanch.org', website: 'https://sanskritimanch.org',
+            expectedSize: 500, description: 'Cultural trust running bhajan evenings, folk music and heritage walks in Nashik.',
+            status: 'APPROVED', reviewedBy: superAdmin._id, reviewedAt: new Date(), reviewNote: 'Called the trust office; certificate matches the charity commissioner record',
+            activeIdKey: 'MAHNSK14422009',
+        }),
+        hostApp({
+            applicantId: orgHost._id, kind: 'BOTH', orgName: 'Godavari College of Arts and Science', orgType: 'EDUCATION',
+            idType: 'AISHE', idNumber: 'C-41234', idCheck: 'VALID', city: 'Nashik',
+            contactName: 'Dr. Anil Gaikwad', contactPhone: '9000000011', contactEmail: 'principal@godavaricollege.edu.in', website: 'https://godavaricollege.edu.in',
+            expectedSize: 1200, description: 'Public lectures and the annual fest for the city, and seminars on campus for students and staff.',
+            status: 'APPROVED', reviewedBy: superAdmin._id, reviewedAt: new Date(), reviewNote: 'AISHE code and certificate checked',
+            activeIdKey: 'C41234',
+        }),
+        hostApp({
+            applicantId: hostApplicant._id, kind: 'BOTH', orgName: 'Prerana Seva Foundation', orgType: 'CHARITY',
+            idType: 'DARPAN', idNumber: 'MH/2021/0291234', idCheck: 'VALID', city: 'Nashik',
+            contactName: 'Sister Mary Thomas', contactPhone: '9000000012', contactEmail: 'office@preranaseva.org', website: 'https://preranaseva.org',
+            expectedSize: 300, description: 'Free health camps for pilgrims, and volunteer training days for our own members.',
+            pendingFor: hostApplicant._id, activeIdKey: 'MH20210291234',
+        }),
+        hostApp({
+            applicantId: hostRejected._id, kind: 'PUBLIC', orgName: 'Shinde Events and Tours', orgType: 'COMPANY',
+            idType: 'UDYAM', idNumber: 'UDYAM-MH-12-0012345', idCheck: 'VALID', city: 'Nashik',
+            contactName: 'Vikram Shinde', contactPhone: '9000000013', contactEmail: 'vikramshinde.events@gmail.com',
+            expectedSize: 2000, description: 'Ghat darshan tours and evening events for pilgrim groups.',
+            status: 'REJECTED', reviewedBy: superAdmin._id, reviewedAt: new Date(), rejectionReason: 'The Udyam certificate is for a different business name. Apply again with your own certificate.',
+        }),
+    ]);
+    const hosted = (host, org, o) => ({ city: 'Nashik', state: 'Maharashtra', organizerId: host._id, organiserName: org, organiserVerified: true, attendeesCount: 0, ...o });
+    await Event.create(hosted(eventHost, 'Nashik Sanskriti Manch', {
+        kind: 'PUBLIC', title: 'Lokgeet Sandhya: Folk Songs of the Godavari', slug: 'lokgeet-sandhya-godavari',
+        category: 'MUSIC', hostName: 'Nashik Sanskriti Manch', contactCountryCode: '91', contactPhone: '9000000010',
+        description: 'An evening of Marathi folk songs (ovi, bharud and abhang) about the river and the yatra, sung by village mandals. Open-air seating on durries; carry a shawl.',
+        venue: 'Golf Club Ground, open-air stage', address: 'Golf Club Ground, Nashik', pincode: '422002',
+        startDate: istDateTime(addDays(today, 4), '18:00'), endDate: istDateTime(addDays(today, 4), '21:00'),
+        capacity: 150, attendeesCount: 21, ticketPrice: 0,
+    }));
+    await Event.create(hosted(orgHost, 'Godavari College of Arts and Science', {
+        kind: 'PUBLIC', title: 'Public Lecture: The History of the Simhastha', slug: 'lecture-history-simhastha',
+        category: 'EXHIBITION', hostName: 'Godavari College of Arts and Science', contactCountryCode: '91', contactPhone: '9000000011',
+        description: 'The department of history traces the Kumbh at Nashik from the Peshwa records to today, with old maps and photographs. Free, open to everyone; seats on a first-come basis.',
+        venue: 'College auditorium', address: 'College Road, Nashik', pincode: '422005',
+        startDate: istDateTime(addDays(today, 6), '11:00'), endDate: istDateTime(addDays(today, 6), '13:00'),
+        capacity: 200, attendeesCount: 34, ticketPrice: 0,
+    }));
+    const campusCode = String(require('crypto').randomInt(100000, 1000000));
+    await Event.create(hosted(orgHost, 'Godavari College of Arts and Science', {
+        kind: 'CORPORATE', title: 'Crowd Safety Volunteer Training (students)', slug: 'campus-crowd-safety-training',
+        companyName: 'Godavari College of Arts and Science', accessCode: campusCode, venue: 'Seminar hall, Block B',
+        description: 'For NSS and NCC students volunteering at the Kumbh: crowd flow, first response and lost-child drills.',
+        startDate: istDateTime(addDays(today, 8), '10:00'), endDate: istDateTime(addDays(today, 8), '16:00'),
+        sessions: [
+            { code: 'FLOW', title: 'How crowds move at the ghats', kind: 'SESSION', time: '10:00' },
+            { code: 'DRILL', title: 'Lost-child drill', kind: 'SESSION', time: '11:30' },
+            { code: 'LUNCH', title: 'Lunch', kind: 'MEAL', time: '13:00' },
+            { code: 'FIRSTAID', title: 'First response with the medical team', kind: 'SESSION', time: '14:00' },
+        ],
+    }));
 
     // ---------- Providers ----------
     const [ramSeva, annadan, nmc] = await Provider.insertMany([
@@ -802,10 +884,37 @@ async function main() {
         { role: 'USER', phone: '9000000007', name: `${pilgrim2.name} (pending volunteer)` },
         { role: 'NGO_ADMIN', phone: '9000000008', name: `${ngoAdmin2.name} (Annadan Samiti)` },
         { role: 'USER', phone: '9000000009', name: `${applicant.name} (pending NGO)` },
+        { role: 'EVENT_HOST', phone: '9000000010', name: `${eventHost.name} (Nashik Sanskriti Manch, public events)` },
+        { role: 'ORG_HOST', phone: '9000000011', name: `${orgHost.name} (Godavari College, public + campus events)` },
+        { role: 'USER', phone: '9000000012', name: `${hostApplicant.name} (host request waiting for the Super Admin)` },
+        { role: 'USER', phone: '9000000013', name: `${hostRejected.name} (host request not approved; can apply again)` },
     ]);
+    console.log(`Campus access code for "Crowd Safety Volunteer Training": ${campusCode}`);
     console.log(`Corporate access code for "Simhastha Infrastructure & CSR Summit": ${CORPORATE_CODE}`);
     console.log(`Lodgings: ${lodgings.length}, kitchens: ${centers.length}, meal slots: ${slots.length}, public event: ${cleanup.title}, wari: ${wari.title}`);
     await mongoose.disconnect();
+}
+
+/** A one-page PDF standing in for an organisation's registration certificate (demo only). */
+function demoCertificate() {
+    const text = 'BT /F1 18 Tf 72 720 Td (Registration certificate - DEMO) Tj 0 -28 Td /F1 12 Tf (Sample document seeded for the CrowdGrid demonstration.) Tj ET';
+    const objs = [
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+        `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ];
+    let out = '%PDF-1.4\n';
+    const offsets = objs.map((body, i) => {
+        const at = out.length;
+        out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+        return at;
+    });
+    const xref = out.length;
+    out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+    out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    return Buffer.from(out, 'latin1');
 }
 
 main().catch(async (err) => {
