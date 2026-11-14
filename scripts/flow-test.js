@@ -1008,6 +1008,8 @@ async function main() {
                 const cardOut = await volunteers.idDocument(stale._id, desk);
                 check('The control room can open the ID card', cardOut.data.length === card.length && cardOut.contentType === 'image/jpeg');
                 await expectError('Another person cannot open the ID card', () => volunteers.idDocument(stale._id, { ...ngoRow, id: String(ngoRow._id) }), 404);
+                await expectError('Rejecting a volunteer needs a written reason', () => volunteers.review(stale._id, desk, { decision: 'REJECTED' }), 400, /reason/i);
+                await expectError('Rejecting an organisation needs a written reason', () => require('../modules/provider/provider.service').decide(String(new mongoose.Types.ObjectId()), desk, { decision: 'REJECTED', reason: { $gt: '' } }), 400, /reason/i);
                 await volunteers.review(stale._id, desk, { decision: 'APPROVED' });
                 check('The control room approves: the account becomes a volunteer with a badge', (await User.findById(sevakRow._id).lean()).role === 'VOLUNTEER' && !!(await Pass.exists({ userId: sevakRow._id, type: 'VOLUNTEER' })));
                 const sector = (await duties.sectorsFor(event._id))[0];
