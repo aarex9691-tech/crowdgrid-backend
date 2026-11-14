@@ -374,9 +374,11 @@ async function main() {
             check('Turning 18 today is accepted', !!p18.dateOfBirth);
         }
 
-        // ---- 7. Hosting a paid public event ----
-        const authorityUser = await User.findOne({ phone: '9000000002' }).lean();
-        const host = { ...authorityUser, id: String(authorityUser._id) };
+        // ---- 7. Hosting a paid public event (by a verified organisation, never the control room) ----
+        const hostUser = await User.findOne({ phone: '9000000010' }).lean();
+        const host = { ...hostUser, id: String(hostUser._id) };
+        const controlRow = await User.findOne({ phone: '9000000002' }).lean();
+        const districtDesk = { ...controlRow, id: String(controlRow._id) };
         const start = new Date(Date.now() + 2 * 864e5);
         const base = { kind: 'PUBLIC', title: 'Flow test aarti', category: 'SPIRITUAL', description: 'A test event created by the flow test script to check hosting, the description limits, ticket checkout and the host dashboard. It is deleted automatically when the test run finishes.', venue: 'Test ghat', address: 'Ramkund, Nashik', city: 'Nashik', pincode: '422003', location: { lat: 20.0059, lng: 73.7897 }, startDate: start, endDate: new Date(start.getTime() + 2 * 3600e3), capacity: 5 };
         await expectError('Description over 200 characters (spaces not counted) is refused', () => events.create({ ...base, ticketPrice: 99, description: 'x'.repeat(201) }, host), 400);
@@ -409,6 +411,11 @@ async function main() {
         const freeReg = await events.register(freeId, user);
         check('A ₹0 event registers directly, no payment step', freeReg.pass?.type === 'PUBLIC');
         await expectError('A pilgrim cannot host an event', () => events.create({ ...base, ticketPrice: 99 }, user), 403);
+        await expectError('The District Control Room does not create public events', () => events.create({ ...base, ticketPrice: 99 }, districtDesk), 403);
+        await expectError('The District Control Room does not see the hosted-events dashboard', () => events.hostedEvents(districtDesk), 403);
+        const listedPublic = await Event.find({ kind: { $in: ['PUBLIC', 'CORPORATE'] }, status: 'ACTIVE', title: { $not: /^Flow test/i } }).populate('organizerId', 'role').lean();
+        const unowned = listedPublic.filter((e) => !['SUPER_ADMIN', 'CORPORATE_ADMIN', 'EVENT_HOST', 'ORG_HOST'].includes(e.organizerId?.role) || !e.organiserName);
+        check('Every public and campus event belongs to a named organisation (none to the control room)', listedPublic.length > 0 && !unowned.length, unowned.map((e) => e.title).join(', '));
         hostedId = (await events.create({ ...base, ticketPrice: 99, sectors: ['should be dropped'] }, host))._id;
         const stored = await Event.findById(hostedId).lean();
         check('Host event saved with address, map point and price; unrelated fields dropped', stored.ticketPrice === 99 && stored.location?.lat === 20.0059 && stored.sectors === undefined && stored.keyDates === undefined);
@@ -420,6 +427,7 @@ async function main() {
         const mineHosted = hosted.find((e) => String(e._id) === String(hostedId));
         check('Host dashboard shows tickets sold and revenue', mineHosted?.ticketsSold === 1 && mineHosted?.revenue === 99);
         const { hasPermission } = require('../config/roles');
+        check('The District Control Room manages neither public nor campus events', !hasPermission('AUTHORITY', 'event:create:public') && !hasPermission('AUTHORITY', 'event:create:corporate'));
         check('Admins and hosts cannot book (they use their own dashboards)', ['SUPER_ADMIN', 'AUTHORITY', 'CORPORATE_ADMIN', 'NGO_ADMIN', 'VOLUNTEER'].every((r) => !hasPermission(r, 'booking:create')) && hasPermission('USER', 'booking:create'));
 
         {
