@@ -436,12 +436,13 @@ async function main() {
             const { HostApplication } = require('../modules/host/host.model');
             const HP = '6999999993';
             const HP2 = '6999999994';
+            const HP3 = '6999999997';
             const superRow = await User.findOne({ role: 'SUPER_ADMIN' }).lean();
             const sa = { ...superRow, id: String(superRow._id) };
             const rameshRow = await User.findOne({ phone: '9000000006' }).lean();
             const ramesh = { ...rameshRow, id: String(rameshRow._id) };
             const cleanHosts = async () => {
-                const ids = (await User.find({ phone: { $in: [HP, HP2] } }, '_id').lean()).map((u) => u._id);
+                const ids = (await User.find({ phone: { $in: [HP, HP2, HP3] } }, '_id').lean()).map((u) => u._id);
                 await Promise.all([
                     HostApplication.deleteMany({ $or: [{ applicantId: { $in: [...ids, rameshRow._id] } }, { orgName: /^Flow Test/ }] }),
                     Event.deleteMany({ organizerId: { $in: ids } }),
@@ -498,6 +499,17 @@ async function main() {
                 await expectError('Someone not invited cannot claim a campus badge, even with the code', () => events.claimCorporateBadge(corp._id, user, { code: corp.accessCode, sessions: [corp.sessions[0].code] }), 403, /invit/i);
                 const rameshBadge = await events.claimCorporateBadge(corp._id, ramesh, { code: corp.accessCode, sessions: [corp.sessions[0].code] });
                 check('An invited person claims a badge with the code', rameshBadge.pass?.type === 'CORPORATE');
+                // an email typed onto a profile after the invitation went out is not proof of being invited
+                await auth.register({ name: 'Flow Test Guest', phone: HP3, countryCode: '91', password: 'Crowd@123' });
+                const squatRow = await User.findOne({ phone: HP3 }).lean();
+                const squatter = { ...squatRow, id: String(squatRow._id) };
+                await auth.updateProfile(squatter, { email: 'guest.speaker@example.org' });
+                await expectError('Putting an invited email on your profile after the invitation does not get you a badge', () => events.claimCorporateBadge(corp._id, squatter, { code: corp.accessCode, sessions: [corp.sessions[0].code] }), 403, /invit/i);
+                await auth.updateProfile(squatter, { email: 'early.guest@example.org' });
+                await events.addInvitees(corp._id, orgHost, { entries: 'early.guest@example.org' });
+                const earlyBadge = await events.claimCorporateBadge(corp._id, squatter, { code: corp.accessCode, sessions: [corp.sessions[0].code] }).catch((e) => e);
+                check('An account that already had the invited email claims its badge', earlyBadge.pass?.type === 'CORPORATE', earlyBadge.message);
+                await events.removeInvitee(corp._id, orgHost, { contact: 'early.guest@example.org' });
                 const corpList = await events.corporateAttendees(corp._id, orgHost);
                 const rameshInvite = corpList.find((r) => r.name === rameshRow.name);
                 const pendingGuest = corpList.find((r) => r.contact === 'guest.speaker@example.org');
@@ -505,6 +517,7 @@ async function main() {
                 await expectError('Another organisation cannot see the invite list', () => events.corporateAttendees(corp._id, host), 403);
                 const removed = await events.removeInvitee(corp._id, orgHost, { contact: 'guest.speaker@example.org' });
                 check('The host can remove an invitation', removed.invitees === 1, JSON.stringify(removed));
+                await expectError('A made-up ID type is refused', () => require('../modules/volunteer/volunteer.service').apply(user, { eventId: String(event._id), domain: 'CROWD_CONTROL', dates: [], idType: 'constructor', idLast4: '1234' }, Buffer.from('%PDF-1.4 x')), 400, /ID/);
                 await Pass.deleteMany({ eventId: corp._id });
                 // Public events: online bookings only, and the host sees who booked
                 const bookers = await events.publicAttendees(hostedId, host);
@@ -1002,6 +1015,9 @@ async function main() {
                 const stale = await volunteers.apply(sevak, { ...form, eventId: String(new mongoose.Types.ObjectId()), eventSlug: event.slug }, card);
                 check('A seva application still reaches the right yatra when the page had an old event id', String(stale.eventId) === String(event._id) && stale.status === 'PENDING', stale.message);
                 check('The ID photo is never sent back with the application', !stale.idDocument?.data);
+                const ngoAdminRow = await User.findOne({ phone: '9000000003' }).lean();
+                const trustView = await volunteers.listForReview({ ...ngoAdminRow, id: String(ngoAdminRow._id) }, { status: 'PENDING' });
+                check('A trust sees its volunteers but not their ID details', trustView.length > 0 && trustView.every((a) => !a.idLast4 && !a.idType && !a.checks?.idLast4 && !a.checks?.idType && !a.idDocument), JSON.stringify(trustView[0]?.checks));
                 const queue = await volunteers.listForReview(desk, { status: 'PENDING' });
                 const row = queue.find((a) => String(a._id) === String(stale._id));
                 check('The control room sees the ID type, last 4 digits and whether a card was uploaded', row?.checks?.idType === 'Voter ID' && row.checks.idLast4 === '4821' && row.checks.idDocument === true, JSON.stringify(row?.checks));
