@@ -473,6 +473,8 @@ async function main() {
                 await hostsSvc.decide(app1._id, sa, { decision: 'APPROVED', note: 'AISHE code and certificate checked' });
                 const after = await User.findById(applicantRow._id).lean();
                 check('Approval makes the account an Organisation Host (public and campus events)', after.role === 'ORG_HOST' && after.organisationName === form.orgName, after.role);
+                const minedAfter = (await hostsSvc.mine(applicant))[0];
+                check('The applicant sees the decision but not the Super Admin\'s internal note', minedAfter?.status === 'APPROVED' && !minedAfter.reviewNote && !minedAfter.reviewedBy, JSON.stringify(minedAfter?.reviewNote));
                 await expectError('A request cannot be decided twice', () => hostsSvc.decide(app1._id, sa, { decision: 'REJECTED', reason: 'Changed our mind' }), 409);
                 const orgHost = { ...after, id: String(after._id) };
 
@@ -489,7 +491,7 @@ async function main() {
                 await expectError('A host cannot create a yatra hub', () => events.create({ kind: 'YATRA', title: 'Flow Test fake yatra', city: 'Nashik', isFlagship: true, startDate: start, endDate: new Date(start.getTime() + 86400e3) }, orgHost), 403);
                 const { qr: pilgrimQr } = await passes.myQr(user);
                 const elsewhere = await passes.scan(pilgrimQr, orgHost);
-                check('A host\'s scanner says nothing about a pilgrim\'s passes for other organisers or services', elsewhere.result === 'REJECTED' && elsewhere.reason === 'NO_VALID_PASS' && !elsewhere.pass, `${elsewhere.reason} ${elsewhere.message}`);
+                check('A host\'s scanner says nothing about a pilgrim\'s passes for other organisers or services', elsewhere.result === 'REJECTED' && elsewhere.reason === 'NO_VALID_PASS' && !elsewhere.pass && !elsewhere.holder, `${elsewhere.reason} ${elsewhere.message}`);
 
                 // A rejected organisation is told why, keeps a normal account, and can apply again
                 await auth.register({ name: 'Ravi Deshpande', phone: HP2, countryCode: '91', password: 'Crowd@123' });
