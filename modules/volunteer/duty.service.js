@@ -303,6 +303,11 @@ const mine = async (user) => {
 const checkIn = async (user, id) => {
     idOrThrow(id, 'Duty');
     const now = new Date();
+    // Before the first duty a control-room officer must have seen the volunteer's ID card in person
+    const planned = await Duty.findOne({ _id: id, volunteerId: user._id }, 'eventId').lean();
+    if (planned && !(await VolunteerApplication.exists({ userId: user._id, eventId: planned.eventId, status: 'APPROVED', idVerifiedAt: { $ne: null } }))) {
+        throw conflict('Show your ID card at the control room before your first duty. They will mark it checked.');
+    }
     const duty = await Duty.findOneAndUpdate(
         { _id: id, volunteerId: user._id, status: 'SCHEDULED', start: { $lte: new Date(now.getTime() + CHECKIN_EARLY_MS) }, end: { $gt: now } },
         { $set: { status: 'ON_DUTY', checkedInAt: now } },

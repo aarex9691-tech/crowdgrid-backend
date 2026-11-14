@@ -62,7 +62,9 @@ const PERMISSIONS = Object.freeze({
 
     // Volunteering
     'volunteer:apply': [USER],
-    'volunteer:review': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN],
+    // The District Control Room approves volunteers and checks their ID; trusts only see who serves with them
+    'volunteer:review': [SUPER_ADMIN, AUTHORITY],
+    'volunteer:list': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN],
     // District control room: duties, live roster, coverage, broadcasts
     'volunteer:manage': [SUPER_ADMIN, AUTHORITY],
     // A volunteer's own shifts: check in and out

@@ -128,7 +128,18 @@ const redeem = async (pass, scanner) => {
     // Verify-only credentials (volunteer ID) are never used up
     if (!pass.singleUse) {
         if (pass.status !== 'ACTIVE') return { result: 'REJECTED', reason: 'INACTIVE', message: 'Credential is not active', pass: summary(pass) };
-        return { result: 'VALID', message: 'VALID - ID VERIFIED', pass: summary(pass) };
+        const out = { result: 'VALID', message: 'VALID - ID VERIFIED', pass: summary(pass) };
+        if (pass.type === 'VOLUNTEER') {
+            // the control room is told whether this volunteer's ID card has been seen in person yet
+            const { VolunteerApplication } = require('../volunteer/volunteer.model');
+            const app = await VolunteerApplication.findById(pass.refId, 'idVerifiedAt idType idLast4').lean();
+            if (app) {
+                const officer = [ROLES.SUPER_ADMIN, ROLES.AUTHORITY].includes(scanner.role);
+                out.volunteer = { applicationId: String(app._id), idVerified: Boolean(app.idVerifiedAt), ...(officer ? { idType: app.idType, idLast4: app.idLast4 } : {}) };
+                if (!app.idVerifiedAt) out.message = 'VALID - ID CARD NOT CHECKED YET';
+            }
+        }
+        return out;
     }
 
     const redeemed = await Pass.findOneAndUpdate(

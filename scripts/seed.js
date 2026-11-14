@@ -522,7 +522,7 @@ async function main() {
         mk('Sister Mary Thomas', '9000000012', 'USER', { createdAt: monthAgo }),
         mk('Vikram Shinde', '9000000013', 'USER'),
     ]);
-    const certificate = demoCertificate();
+    const certificate = demoDocument('Registration certificate - DEMO', 'Sample document seeded for the CrowdGrid demonstration.');
     const hostApp = (o) => ({
         contactCountryCode: '91',
         document: { data: certificate, contentType: 'application/pdf', size: certificate.length },
@@ -813,13 +813,19 @@ async function main() {
     ]);
 
     // ---------- Volunteers ----------
+    // Volunteers register with a photo ID (only the last 4 characters are kept); the District Control Room
+    // approves them and checks the card in person before the first duty.
+    const idCard = demoDocument('Photo ID card - DEMO', 'Sample ID seeded for the CrowdGrid demonstration.');
+    const card = { data: idCard, contentType: 'application/pdf', size: idCard.length };
     const approvedApp = await VolunteerApplication.create({
         userId: volunteer._id, eventId: simhastha._id, providerId: ramSeva._id, domain: 'CROWD_CONTROL',
-        sector: SECTORS.RAMKUND, dates: [today, addDays(today, 1)], status: 'APPROVED', reviewedBy: ngoAdmin._id, reviewedAt: new Date(),
+        sector: SECTORS.RAMKUND, dates: [today, addDays(today, 1)], status: 'APPROVED', reviewedBy: authority._id, reviewedAt: new Date(),
+        idType: 'VOTER', idLast4: '7731', idDocument: card, idVerifiedAt: new Date(), idVerifiedBy: authority._id,
     });
     await VolunteerApplication.create({
         userId: pilgrim2._id, eventId: simhastha._id, providerId: ramSeva._id, domain: 'FIRST_AID',
         sector: SECTORS.PANCHAVATI, dates: [addDays(today, 2)], note: 'Trained in basic first aid (Red Cross certificate).',
+        idType: 'DL', idLast4: '0423', idDocument: card,
     });
     await Pass.create({
         type: 'VOLUNTEER', userId: volunteer._id, eventId: simhastha._id, providerId: ramSeva._id, refId: approvedApp._id,
@@ -895,9 +901,9 @@ async function main() {
     await mongoose.disconnect();
 }
 
-/** A one-page PDF standing in for an organisation's registration certificate (demo only). */
-function demoCertificate() {
-    const text = 'BT /F1 18 Tf 72 720 Td (Registration certificate - DEMO) Tj 0 -28 Td /F1 12 Tf (Sample document seeded for the CrowdGrid demonstration.) Tj ET';
+/** A one-page PDF standing in for a certificate or an ID card (demo only). */
+function demoDocument(title, line) {
+    const text = `BT /F1 18 Tf 72 720 Td (${title}) Tj 0 -28 Td /F1 12 Tf (${line}) Tj ET`;
     const objs = [
         '<< /Type /Catalog /Pages 2 0 R >>',
         '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',

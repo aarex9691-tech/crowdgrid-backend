@@ -59,7 +59,7 @@ async function main() {
         }
         await VolunteerApplication.updateOne(
             { userId: user._id, eventId: event._id },
-            { $set: { domain: DOMAINS[i % DOMAINS.length], sector: sectors[i % sectors.length], dates: [today], status: 'APPROVED', reviewedAt: new Date() } },
+            { $set: { domain: DOMAINS[i % DOMAINS.length], sector: sectors[i % sectors.length], dates: [today], status: 'APPROVED', reviewedAt: new Date(), idType: 'VOTER', idLast4: String(1000 + i * 37).slice(-4), idVerifiedAt: new Date() } },
             { upsert: true }
         );
         people.push(user);
@@ -89,7 +89,7 @@ async function main() {
         // the rest are off duty
     });
     if (amit) {
-        await VolunteerApplication.updateOne({ userId: amit._id, eventId: event._id }, { $set: { status: 'APPROVED' } });
+        await VolunteerApplication.updateOne({ userId: amit._id, eventId: event._id }, { $set: { status: 'APPROVED', idVerifiedAt: new Date() } });
         shifts.push({ volunteerId: amit._id, sector: sectors[0], post: 'Help booth', start: now + 10 * 60000, end: now + 6 * HOUR, status: 'SCHEDULED' });
     }
     await Duty.insertMany(shifts.map((s) => ({ ...s, eventId: event._id, start: new Date(s.start), end: new Date(s.end), checkedInAt: s.checkedInAt && new Date(s.checkedInAt) })));
