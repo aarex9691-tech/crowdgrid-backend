@@ -1037,6 +1037,8 @@ async function main() {
                 const badge = await Pass.findOne({ userId: sevakRow._id, type: 'VOLUNTEER' }).lean();
                 const scanned = await passes.scan(require('../utils/passToken').encode(badge), desk);
                 check('Scanning the volunteer badge tells the control room the ID is not checked yet', scanned.volunteer?.idVerified === false && String(scanned.volunteer?.applicationId) === String(stale._id), JSON.stringify(scanned.volunteer));
+                const toCheck = await volunteers.listForReview(desk, { status: 'APPROVED', idVerified: 'false' });
+                check('The control room can list just the volunteers whose ID is not checked yet', toCheck.some((x) => String(x._id) === String(stale._id)) && toCheck.every((x) => !x.checks.idVerified), `${toCheck.length}`);
                 await volunteers.verifyId(stale._id, desk);
                 const checkedIn = await duties.checkIn(volunteerNow, shift._id);
                 check('After the ID check in person, the volunteer can check in to duty', checkedIn.status === 'ON_DUTY');
