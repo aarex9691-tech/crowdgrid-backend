@@ -505,6 +505,7 @@ async function main() {
                 const squatter = { ...squatRow, id: String(squatRow._id) };
                 await auth.updateProfile(squatter, { email: 'guest.speaker@example.org' });
                 await expectError('Putting an invited email on your profile after the invitation does not get you a badge', () => events.claimCorporateBadge(corp._id, squatter, { code: corp.accessCode, sessions: [corp.sessions[0].code] }), 403, /invit/i);
+                await expectError('Someone not invited is stopped at the code step, before choosing sessions', () => events.verifyCorporateCode(corp._id, corp.accessCode, squatter), 403, /invit/i);
                 await auth.updateProfile(squatter, { email: 'early.guest@example.org' });
                 await events.addInvitees(corp._id, orgHost, { entries: 'early.guest@example.org' });
                 const earlyBadge = await events.claimCorporateBadge(corp._id, squatter, { code: corp.accessCode, sessions: [corp.sessions[0].code] }).catch((e) => e);
