@@ -492,6 +492,26 @@ async function main() {
                 check('The badge shows in the public event list', listed?.organiserVerified === true && listed?.organiserName === form.orgName);
                 const corp = await events.create({ kind: 'CORPORATE', title: 'Flow Test campus seminar', companyName: form.orgName, venue: 'Main hall', city: 'Nashik', startDate: start, endDate: new Date(start.getTime() + 3600e3), sessions: [{ title: 'Opening talk' }] }, orgHost).catch((e) => e);
                 check('An Organisation Host can also run campus events', corp.kind === 'CORPORATE' && !!corp.accessCode, corp.message);
+                // Campus events are for invited people only: the host lists them by mobile number or email
+                const added = await events.addInvitees(corp._id, orgHost, { entries: '9000000006\nguest.speaker@example.org\nnot a contact' });
+                check('The host invites people by mobile number or email; wrong lines are reported', added.added === 2 && added.skipped?.length === 1, JSON.stringify(added));
+                await expectError('Someone not invited cannot claim a campus badge, even with the code', () => events.claimCorporateBadge(corp._id, user, { code: corp.accessCode, sessions: [corp.sessions[0].code] }), 403, /invit/i);
+                const rameshBadge = await events.claimCorporateBadge(corp._id, ramesh, { code: corp.accessCode, sessions: [corp.sessions[0].code] });
+                check('An invited person claims a badge with the code', rameshBadge.pass?.type === 'CORPORATE');
+                const corpList = await events.corporateAttendees(corp._id, orgHost);
+                const rameshInvite = corpList.find((r) => r.name === rameshRow.name);
+                const pendingGuest = corpList.find((r) => r.contact === 'guest.speaker@example.org');
+                check('The host sees who is invited, who claimed a badge and who checked in', rameshInvite?.claimed === true && rameshInvite.checkedIn === false && pendingGuest?.claimed === false, JSON.stringify(corpList.map((r) => [r.name || r.contact, r.claimed])));
+                await expectError('Another organisation cannot see the invite list', () => events.corporateAttendees(corp._id, host), 403);
+                const removed = await events.removeInvitee(corp._id, orgHost, { contact: 'guest.speaker@example.org' });
+                check('The host can remove an invitation', removed.invitees === 1, JSON.stringify(removed));
+                await Pass.deleteMany({ eventId: corp._id });
+                // Public events: online bookings only, and the host sees who booked
+                const bookers = await events.publicAttendees(hostedId, host);
+                const flowBooker = bookers.find((b) => b.name === user.name);
+                check('A public-event host sees the names of people who booked, with the phone masked', flowBooker?.people === 1 && /^\+91 •+\d{4}$/.test(flowBooker.phone || '') && !String(flowBooker.phone).includes(PHONE.slice(0, 6)), JSON.stringify(flowBooker));
+                await expectError('Another organisation cannot see who booked', () => events.publicAttendees(hostedId, orgHost), 403);
+                await expectError('The control room cannot see who booked a public event', () => events.publicAttendees(hostedId, districtDesk), 403);
                 await expectError('A host cannot change another organiser\'s event', () => events.update(hostedId, { title: 'Taken over' }, orgHost), 403);
                 check('Each host role covers only its own kind of event', hasPermission('EVENT_HOST', 'event:create:public') && !hasPermission('EVENT_HOST', 'event:create:corporate') && hasPermission('ORG_HOST', 'event:create:public') && hasPermission('ORG_HOST', 'event:create:corporate') && !hasPermission('CORPORATE_ADMIN', 'event:create:public'));
                 const otherTicket = await passes.scan(tPaid.passes[0].qr, orgHost);
