@@ -943,6 +943,65 @@ async function main() {
         await expectError('Staff cannot reset their own password at the help desk', () => helpdesk.reset(deskStaff, deskUser._id), 403);
         check('Only the control room and volunteers can list SOS alerts (not NGO or corporate admins)', hasPermission('AUTHORITY', 'sos:view') && hasPermission('VOLUNTEER', 'sos:view') && !hasPermission('NGO_ADMIN', 'sos:view') && !hasPermission('CORPORATE_ADMIN', 'sos:view'));
         {
+            // ---- Seva volunteers: ID at registration, approval by the District Control Room, ID shown in person ----
+            const volunteers = require('../modules/volunteer/volunteer.service');
+            const duties = require('../modules/volunteer/duty.service');
+            const { Duty } = require('../modules/volunteer/duty.model');
+            const { VolunteerApplication } = require('../modules/volunteer/volunteer.model');
+            const VP = '6999999996';
+            const authRow = await User.findOne({ phone: '9000000002' }).lean();
+            const desk = { ...authRow, id: String(authRow._id) };
+            const ngoRow = await User.findOne({ role: 'NGO_ADMIN' }).lean();
+            const { hasPermission } = require('../config/roles');
+            const cleanSeva = async () => {
+                const ids = (await User.find({ phone: VP }, '_id').lean()).map((u) => u._id);
+                await Promise.all([VolunteerApplication.deleteMany({ userId: { $in: ids } }), Duty.deleteMany({ volunteerId: { $in: ids } }), Pass.deleteMany({ userId: { $in: ids } }), User.deleteMany({ _id: { $in: ids } })]);
+            };
+            await cleanSeva();
+            try {
+                await auth.register({ name: 'Flow Test Sevak', phone: VP, countryCode: '91', password: 'Crowd@123' });
+                const sevakRow = await User.findOne({ phone: VP }).lean();
+                const sevak = { ...sevakRow, id: String(sevakRow._id) };
+                const card = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(300, 7), Buffer.from([0xff, 0xd9])]);
+                const day = istDate() >= istDate(event.startDate) ? istDate() : istDate(event.startDate);
+                const form = { eventId: String(event._id), domain: 'CROWD_CONTROL', dates: [day], idType: 'VOTER', idLast4: '4821' };
+                check('Only the District Control Room and the Super Admin approve volunteers (not trusts)', hasPermission('AUTHORITY', 'volunteer:review') && hasPermission('SUPER_ADMIN', 'volunteer:review') && !hasPermission('NGO_ADMIN', 'volunteer:review'));
+                await expectError('A seva application needs an ID type', () => volunteers.apply(sevak, { ...form, idType: undefined }, card), 400, /ID/);
+                await expectError('Only the last 4 characters of the ID are taken', () => volunteers.apply(sevak, { ...form, idLast4: '1234 5678 9012' }, card), 400, /last 4/i);
+                await expectError('A seva application needs a photo of the ID card', () => volunteers.apply(sevak, form, null), 400, /ID card/i);
+                await expectError('The ID photo must be a real image or PDF', () => volunteers.apply(sevak, form, Buffer.from('not a picture')), 400, /PDF|image|JPEG/i);
+                // the page still had the event's old id (the database was seeded again): the yatra is found by its name
+                const stale = await volunteers.apply(sevak, { ...form, eventId: String(new mongoose.Types.ObjectId()), eventSlug: event.slug }, card);
+                check('A seva application still reaches the right yatra when the page had an old event id', String(stale.eventId) === String(event._id) && stale.status === 'PENDING', stale.message);
+                check('The ID photo is never sent back with the application', !stale.idDocument?.data);
+                const queue = await volunteers.listForReview(desk, { status: 'PENDING' });
+                const row = queue.find((a) => String(a._id) === String(stale._id));
+                check('The control room sees the ID type, last 4 digits and whether a card was uploaded', row?.checks?.idType === 'Voter ID' && row.checks.idLast4 === '4821' && row.checks.idDocument === true, JSON.stringify(row?.checks));
+                const cardOut = await volunteers.idDocument(stale._id, desk);
+                check('The control room can open the ID card', cardOut.data.length === card.length && cardOut.contentType === 'image/jpeg');
+                await expectError('Another person cannot open the ID card', () => volunteers.idDocument(stale._id, { ...ngoRow, id: String(ngoRow._id) }), 404);
+                await volunteers.review(stale._id, desk, { decision: 'APPROVED' });
+                check('The control room approves: the account becomes a volunteer with a badge', (await User.findById(sevakRow._id).lean()).role === 'VOLUNTEER' && !!(await Pass.exists({ userId: sevakRow._id, type: 'VOLUNTEER' })));
+                const sector = (await duties.sectorsFor(event._id))[0];
+                const H = 3600000;
+                const shift = await duties.assign(desk, { eventId: String(event._id), volunteerId: String(sevakRow._id), sector, post: 'flow-test-id', start: new Date(Date.now() + 10 * 60000).toISOString(), end: new Date(Date.now() + 2 * H).toISOString() });
+                const volunteerNow = { ...(await User.findById(sevakRow._id).lean()), id: String(sevakRow._id) };
+                await expectError('A volunteer cannot start work before showing their ID in person', () => duties.checkIn(volunteerNow, shift._id), 409, /ID/);
+                const badge = await Pass.findOne({ userId: sevakRow._id, type: 'VOLUNTEER' }).lean();
+                const scanned = await passes.scan(require('../utils/passToken').encode(badge), desk);
+                check('Scanning the volunteer badge tells the control room the ID is not checked yet', scanned.volunteer?.idVerified === false && String(scanned.volunteer?.applicationId) === String(stale._id), JSON.stringify(scanned.volunteer));
+                await volunteers.verifyId(stale._id, desk);
+                const checkedIn = await duties.checkIn(volunteerNow, shift._id);
+                check('After the ID check in person, the volunteer can check in to duty', checkedIn.status === 'ON_DUTY');
+                await expectError('An ID check cannot be done before approval or twice', () => volunteers.verifyId(stale._id, desk), 409);
+                const amitApp = await VolunteerApplication.findOne({ userId: (await User.findOne({ phone: '9000000005' }).lean())._id, status: 'APPROVED' }).lean();
+                check('The demo volunteer has already shown their ID (so the demo check-in works)', !!amitApp?.idVerifiedAt);
+            } finally {
+                await cleanSeva();
+            }
+        }
+
+        {
             // ---- Volunteer duties (control room) ----
             const duties = require('../modules/volunteer/duty.service');
             const { Duty } = require('../modules/volunteer/duty.model');
