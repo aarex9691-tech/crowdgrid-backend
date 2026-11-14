@@ -560,6 +560,11 @@ async function main() {
             status: 'REJECTED', reviewedBy: superAdmin._id, reviewedAt: new Date(), rejectionReason: 'The Udyam certificate is for a different business name. Apply again with your own certificate.',
         }),
     ]);
+    // The public events above were created before the hosts existed: they belong to these organisations
+    const handOver = async (slugs, host, org, phone) =>
+        Event.updateMany({ slug: { $in: slugs } }, { $set: { organizerId: host._id, organiserName: org, organiserVerified: true, hostName: org, contactCountryCode: '91', contactPhone: phone } });
+    await handOver(['panchavati-heritage-walk'], orgHost, 'Godavari College of Arts and Science', '9000000011');
+    await Event.updateMany({ kind: 'PUBLIC', organizerId: authority._id }, { $set: { organizerId: eventHost._id, organiserName: 'Nashik Sanskriti Manch', organiserVerified: true, hostName: 'Nashik Sanskriti Manch', contactCountryCode: '91', contactPhone: '9000000010' } });
     const hosted = (host, org, o) => ({ city: 'Nashik', state: 'Maharashtra', organizerId: host._id, organiserName: org, organiserVerified: true, attendeesCount: 0, ...o });
     await Event.create(hosted(eventHost, 'Nashik Sanskriti Manch', {
         kind: 'PUBLIC', title: 'Lokgeet Sandhya: Folk Songs of the Godavari', slug: 'lokgeet-sandhya-godavari',

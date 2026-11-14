@@ -41,7 +41,8 @@ const PERMISSIONS = Object.freeze({
     // Create the official yatra hubs (never organisation hosts)
     'event:create:yatra': [SUPER_ADMIN, AUTHORITY],
     // Create public event hubs
-    'event:create:public': [SUPER_ADMIN, AUTHORITY, EVENT_HOST, ORG_HOST],
+    // Public events belong to the organisation that hosts them (and the Super Admin), not the control room
+    'event:create:public': [SUPER_ADMIN, EVENT_HOST, ORG_HOST],
     // Create & manage corporate events
     'event:create:corporate': [SUPER_ADMIN, CORPORATE_ADMIN, ORG_HOST],
 
