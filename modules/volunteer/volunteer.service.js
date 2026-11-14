@@ -152,6 +152,9 @@ const verifyId = async (id, officer) => {
  */
 const review = async (applicationId, reviewer, { decision, reason } = {}) => {
     if (!['APPROVED', 'REJECTED'].includes(decision)) throw badRequest('decision must be APPROVED or REJECTED');
+    // the volunteer sees the reason, so it must be real words
+    if (decision === 'REJECTED' && (typeof reason !== 'string' || reason.trim().length < 5)) throw badRequest('Give a reason for rejecting: the volunteer sees it');
+    if (typeof reason === 'string') reason = reason.trim().slice(0, 300);
     const app = await VolunteerApplication.findById(applicationId);
     if (!app) throw notFound('Application not found');
     if (reviewer.role === ROLES.NGO_ADMIN && String(app.providerId) !== String(reviewer.providerId)) {

@@ -49,6 +49,9 @@ const list = async ({ status, eventId } = {}) => {
 /** Super Admin / Authority verifies or rejects. Verification promotes the applicant to NGO_ADMIN. */
 const decide = async (providerId, reviewer, { decision, reason } = {}) => {
     if (!['VERIFIED', 'REJECTED'].includes(decision)) throw badRequest('decision must be VERIFIED or REJECTED');
+    // the organisation sees the reason, so it must be real words
+    if (decision === 'REJECTED' && (typeof reason !== 'string' || reason.trim().length < 5)) throw badRequest('Give a reason for rejecting: the organisation sees it');
+    if (typeof reason === 'string') reason = reason.trim().slice(0, 300);
     const result = await withTransaction(async (session) => {
         const provider = await Provider.findOneAndUpdate(
             { _id: providerId, verificationStatus: 'PENDING' },
