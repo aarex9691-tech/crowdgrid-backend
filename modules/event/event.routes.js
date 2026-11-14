@@ -76,6 +76,18 @@ router.post('/:id/corporate/code', requireAuth, async (req, res) => {
     res.json(await events.regenerateCorporateCode(req.params.id, req.user));
 });
 
+router.post('/:id/corporate/invitees', requireAuth, async (req, res) => {
+    res.json(await events.addInvitees(req.params.id, req.user, req.body || {}));
+});
+
+router.post('/:id/corporate/invitees/remove', requireAuth, async (req, res) => {
+    res.json(await events.removeInvitee(req.params.id, req.user, req.body || {}));
+});
+
+router.get('/:id/attendees', requireAuth, async (req, res) => {
+    res.json(await events.publicAttendees(req.params.id, req.user));
+});
+
 router.get('/:id/corporate/attendees', requireAuth, async (req, res) => {
     res.json(await events.corporateAttendees(req.params.id, req.user));
 });

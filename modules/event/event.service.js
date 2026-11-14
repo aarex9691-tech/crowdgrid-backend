@@ -261,23 +261,111 @@ const myCorporateEvents = async (user) => {
     }));
 };
 
-/** Organiser or Super Admin: who has claimed a badge, their sessions, and whether they checked in. */
-const corporateAttendees = async (eventId, user) => {
-    const event = await findEvent(eventId);
+const MAX_INVITEES = 500;
+const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const masked = (countryCode, phone) => (phone ? `+${countryCode || '91'} ${'•'.repeat(Math.max(String(phone).length - 4, 2))}${String(phone).slice(-4)}` : undefined);
+const contactOf = (i) => i.email || `+${i.countryCode || '91'} ${i.phone}`;
+
+/** One line of the invite list: a 10-digit Indian mobile (optionally +91 / 0 first) or an email. */
+const parseInvitee = (line) => {
+    const raw = String(line).trim();
+    if (!raw) return null;
+    if (EMAIL_RX.test(raw)) return { email: raw.toLowerCase().slice(0, 120) };
+    const digits = raw.replace(/[\s\-()]/g, '');
+    const m = digits.match(/^(?:\+?91|0)?([6-9]\d{9})$/);
+    return m ? { countryCode: '91', phone: m[1] } : undefined; // undefined: not a contact
+};
+
+const corporateEventFor = async (eventId, user) => {
+    const event = await findEvent(eventId, '+invitees');
     if (event.kind !== 'CORPORATE') throw badRequest('Not a corporate event');
     assertCanManageKind(user, event.kind);
     assertOwnerOrAdmin(event, user);
+    return event;
+};
+
+/** Organiser: invite people by mobile number or email (one per line or comma). Wrong lines are reported. */
+const addInvitees = async (eventId, user, { entries } = {}) => {
+    const event = await corporateEventFor(eventId, user);
+    const lines = String(entries || '').split(/[\n,;]+/).slice(0, MAX_INVITEES);
+    const have = new Set((event.invitees || []).map(contactOf));
+    const fresh = [];
+    const skipped = [];
+    for (const line of lines) {
+        const parsed = parseInvitee(line);
+        if (parsed === null) continue;
+        if (!parsed) {
+            skipped.push(String(line).trim().slice(0, 60));
+            continue;
+        }
+        const key = contactOf(parsed);
+        if (have.has(key)) continue;
+        have.add(key);
+        fresh.push({ ...parsed, addedAt: new Date() });
+    }
+    if ((event.invitees?.length || 0) + fresh.length > MAX_INVITEES) throw badRequest(`An event can have at most ${MAX_INVITEES} invited people`);
+    if (fresh.length) await Event.updateOne({ _id: event._id }, { $push: { invitees: { $each: fresh } } });
+    if (fresh.length) audit.record({ actor: user, action: 'INVITEES_ADDED', targetType: 'Event', targetId: event._id, summary: `${user.name} invited ${fresh.length} people to "${event.title}"` });
+    return { added: fresh.length, skipped, invitees: (event.invitees?.length || 0) + fresh.length };
+};
+
+/** Organiser: withdraw an invitation (a badge already claimed stays until cancelled). */
+const removeInvitee = async (eventId, user, { contact } = {}) => {
+    const event = await corporateEventFor(eventId, user);
+    const target = parseInvitee(contact);
+    if (!target) throw badRequest('Choose an invited mobile number or email');
+    const key = contactOf(target);
+    const left = (event.invitees || []).filter((i) => contactOf(i) !== key);
+    await Event.updateOne({ _id: event._id }, { $set: { invitees: left } });
+    return { invitees: left.length };
+};
+
+/** Is this account on the event's invite list? (by its mobile number or its profile email) */
+const isInvited = (event, user) =>
+    (event.invitees || []).some((i) => (i.phone && i.phone === user.phone && (i.countryCode || '91') === (user.countryCode || '91')) || (i.email && user.email && i.email === String(user.email).toLowerCase()));
+
+/** Organiser or Super Admin: everyone invited, who has claimed a badge (and sessions), who checked in. */
+const corporateAttendees = async (eventId, user) => {
+    const event = await corporateEventFor(eventId, user);
     const passes = await Pass.find({ eventId: event._id, type: 'CORPORATE', status: { $ne: 'CANCELLED' } })
-        .populate('userId', 'name countryCode phone')
+        .populate('userId', 'name countryCode phone email')
         .sort({ createdAt: -1 })
         .lean();
-    return passes.map((p) => ({
+    const rows = passes.map((p) => ({
         _id: p._id,
         name: p.userId?.name,
+        contact: p.userId?.email && !p.userId?.phone ? p.userId.email : `+${p.userId?.countryCode || '91'} ${p.userId?.phone}`,
         phone: p.userId?.phone && `+${p.userId.countryCode || '91'} ${p.userId.phone}`,
+        claimed: true,
         sessions: p.details?.sessions || [],
         claimedAt: p.createdAt,
         checkedIn: p.status === 'REDEEMED',
+        checkedInAt: p.redeemedAt,
+        _match: p.userId,
+    }));
+    // invited people who have not claimed a badge yet
+    for (const i of event.invitees || []) {
+        const claimedBy = rows.find((r) => r._match && ((i.phone && r._match.phone === i.phone) || (i.email && String(r._match.email || '').toLowerCase() === i.email)));
+        if (claimedBy) claimedBy.invited = contactOf(i);
+        else rows.push({ _id: `invite:${contactOf(i)}`, contact: contactOf(i), invited: contactOf(i), claimed: false, checkedIn: false, sessions: [] });
+    }
+    return rows.map(({ _match, ...r }) => r);
+};
+
+/** Organiser or Super Admin of a public event: who booked online (phone masked), how many, checked in or not. */
+const publicAttendees = async (eventId, user) => {
+    const event = await findEvent(eventId);
+    if (event.kind !== 'PUBLIC') throw badRequest('Not a public event');
+    assertCanManageKind(user, event.kind);
+    assertOwnerOrAdmin(event, user);
+    const passes = await Pass.find({ eventId: event._id, type: 'PUBLIC' }).populate('userId', 'name countryCode phone').sort({ createdAt: -1 }).limit(2000).lean();
+    return passes.map((p) => ({
+        _id: p._id,
+        name: p.userId?.name,
+        phone: masked(p.userId?.countryCode, p.userId?.phone),
+        people: p.details?.people || 1,
+        status: p.status === 'CANCELLED' ? 'CANCELLED' : p.status === 'REDEEMED' ? 'CHECKED_IN' : 'BOOKED',
+        bookedAt: p.createdAt,
         checkedInAt: p.redeemedAt,
     }));
 };
@@ -489,9 +577,9 @@ const hostedEvents = async (user) => {
     const byEvent = new Map(counts.map((c) => [String(c._id), c]));
     return events.map((e) => {
         const c = byEvent.get(String(e._id));
-        const sold = e.attendeesCount || 0; // includes tickets sold at the counter
-        // attendeesCount already drops cancelled tickets; add back what was kept from them
-        return { ...e, ticketsSold: sold, onlineTickets: c?.sold || 0, checkedIn: c?.checkedIn || 0, refunded: c?.refunded || 0, revenue: sold * (e.ticketPrice || 0) + (c?.keptOnCancel || 0) };
+        // Tickets are booked online only: every place taken is a pass in someone's passbook
+        const sold = c?.sold || 0;
+        return { ...e, ticketsSold: sold, checkedIn: c?.checkedIn || 0, refunded: c?.refunded || 0, revenue: sold * (e.ticketPrice || 0) + (c?.keptOnCancel || 0) };
     });
 };
 
@@ -516,6 +604,10 @@ const verifyCorporateCode = async (eventId, code) => {
 /** Step 2: claim the digital badge for the chosen sessions / meals. */
 const claimCorporateBadge = async (eventId, user, { code, sessions = [] }) => {
     const event = await checkCode(eventId, code);
+    // Campus and corporate events are for invited people only (the code alone is not enough)
+    const withList = await Event.findById(event._id, '+invitees').lean();
+    const account = await User.findById(user._id, 'phone countryCode email').lean();
+    if (!isInvited(withList, account || user)) throw forbidden('You are not on the invitation list for this event. Ask the organiser to invite your mobile number or email.');
     const valid = new Set(event.sessions.map((s) => s.code));
     const chosen = [...new Set((Array.isArray(sessions) ? sessions : []).map(String))].filter((c) => valid.has(c));
     if (!chosen.length) throw badRequest('Pick at least one session');
@@ -557,5 +649,5 @@ module.exports = {
     hostedEvents,
     findEvent, list, get, create, update, archive,
     verifyCorporateCode, claimCorporateBadge, getCorporateCode, regenerateCorporateCode, generateAccessCode,
-    myCorporateEvents, corporateAttendees, findByAccessCode,
+    myCorporateEvents, corporateAttendees, findByAccessCode, addInvitees, removeInvitee, publicAttendees,
 };

@@ -884,6 +884,43 @@ async function main() {
     await TransitRoute.updateMany({ vehicleType: /rickshaw/i }, { $set: { seatsPerTrip: 6 } });
     await TransitRoute.updateMany({ vehicleType: /bus/i }, { $set: { seatsPerTrip: 40 } });
 
+    // ---------- Bookings: public events are booked online only ----------
+    // Every place taken on a public event is a real ticket in someone's passbook, so the host's list of
+    // who booked matches the count shown to visitors. A pool of demo pilgrims (phones 90000301xx) books them.
+    const ATTENDEE_NAMES = ['Aarti Kulkarni', 'Rohan Deshpande', 'Snehal Patil', 'Ganesh Shinde', 'Pooja Joshi', 'Vaibhav More', 'Kavya Iyer', 'Sachin Pawar', 'Neha Bhosale', 'Omkar Gaikwad', 'Shruti Nair', 'Aditya Rane', 'Manasi Gokhale', 'Tejas Jadhav', 'Ritu Sharma', 'Prasad Kale', 'Anjali Menon', 'Harsh Thakur', 'Devika Rao', 'Siddharth Chavan', 'Meghna Pillai', 'Yash Salunkhe', 'Isha Kapoor', 'Nikhil Wagh', 'Priyanka Sawant', 'Akash Mane', 'Swati Kadam', 'Rahul Mehta', 'Gauri Phadke', 'Kunal Bendre'];
+    const pool = await User.insertMany(ATTENDEE_NAMES.map((name, i) => mk(name, `90000301${String(i).padStart(2, '0')}`, 'USER', { createdAt: monthAgo })));
+    const publicEvents = await Event.find({ kind: 'PUBLIC' }).lean();
+    const tickets = [];
+    for (const ev of publicEvents) {
+        // up to 5 people per booking, at most one booking per demo pilgrim per event (30 x 5 = 150 places)
+        let left = Math.min(ev.attendeesCount || 0, pool.length * 5);
+        let taken = 0;
+        for (let i = 0; left > 0 && i < pool.length; i++) {
+            const who = pool[(i + ev.title.length) % pool.length];
+            const people = Math.min(left, 1 + ((i * 7 + ev.title.length) % 5));
+            left -= people;
+            taken += people;
+            tickets.push({
+                type: 'PUBLIC', userId: who._id, eventId: ev._id, refId: ev._id, title: ev.title,
+                subtitle: `${ev.venue}, ${ev.city} - Entry ticket`,
+                details: { venue: ev.venue, address: ev.address, city: ev.city, startsAt: ev.startDate, people, paid: people * (ev.ticketPrice || 0) },
+                validFrom: new Date(new Date(ev.startDate).getTime() - 3600000), validUntil: ev.endDate,
+                singleUse: true, nonce: passToken.newNonce(), dedupeKey: `PUBLIC:${ev._id}:${who._id}`,
+                createdAt: new Date(Date.now() - ((i * 37) % 240) * 3600000),
+            });
+        }
+        await Event.updateOne({ _id: ev._id }, { $set: { attendeesCount: taken } });
+    }
+    await Pass.insertMany(tickets);
+
+    // Campus / corporate events: only invited people can claim a badge (by mobile number or email)
+    const invite = (phones, emails = []) => [
+        ...phones.map((phone) => ({ countryCode: '91', phone, addedAt: new Date() })),
+        ...emails.map((email) => ({ email, addedAt: new Date() })),
+    ];
+    await Event.updateOne({ slug: 'simhastha-csr-summit' }, { $set: { invitees: invite(['9000000006', '9000000007', ...pool.slice(0, 6).map((u) => u.phone)], ['csr.head@sahyadriinfra.example', 'water.panel@example.org']) } });
+    await Event.updateOne({ slug: 'campus-crowd-safety-training' }, { $set: { invitees: invite(['9000000006', '9000000009', ...pool.slice(6, 14).map((u) => u.phone)], ['nss.coordinator@godavaricollege.edu.in']) } });
+
     console.log('\nSeed complete. All demo accounts use SEED_PASSWORD from .env.');
     console.table([
         { role: 'SUPER_ADMIN', phone: '9000000001', name: superAdmin.name },
@@ -901,6 +938,7 @@ async function main() {
         { role: 'USER', phone: '9000000013', name: `${hostRejected.name} (host request not approved; can apply again)` },
     ]);
     console.log(`Campus access code for "Crowd Safety Volunteer Training": ${campusCode}`);
+    console.log(`Public-event bookings: ${tickets.length} (by ${pool.length} demo pilgrims, phones 9000030100-9000030129). Invited to both campus/corporate events: 9000000006 (Ramesh).`);
     console.log(`Corporate access code for "Simhastha Infrastructure & CSR Summit": ${CORPORATE_CODE}`);
     console.log(`Lodgings: ${lodgings.length}, kitchens: ${centers.length}, meal slots: ${slots.length}, public event: ${cleanup.title}, wari: ${wari.title}`);
     await mongoose.disconnect();

@@ -54,6 +54,12 @@ const eventSchema = new mongoose.Schema(
         companyName: { type: String, maxlength: 120 },
         accessCode: { type: String, select: false },
         sessions: { type: [sessionSchema], default: undefined },
+        // Only these people can claim a badge (matched on their account's mobile number or email)
+        invitees: {
+            type: [{ _id: false, countryCode: String, phone: String, email: { type: String, lowercase: true }, addedAt: Date }],
+            default: undefined,
+            select: false,
+        },
 
         organizerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
         // Events run by a verified organisation (an approved host) carry its name and a badge
