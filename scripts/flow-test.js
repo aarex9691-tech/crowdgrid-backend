@@ -1095,6 +1095,10 @@ async function main() {
                 const people = await programmes.attendees(prog._id, km);
                 check('The organiser sees who registered (phone masked)', people.length === 1 && people[0].name === yatri.name && /•/.test(people[0].phone), JSON.stringify(people));
                 await expectError('Another organisation cannot see who registered', () => programmes.attendees(prog._id, collegeHost), 403);
+                const amitRow = await User.findOne({ phone: '9000000005' }).lean();
+                const { qr: yatriQr } = await passes.myQr(yatri);
+                const atVolunteerDesk = await passes.scan(yatriQr, { ...amitRow, id: String(amitRow._id) });
+                check('Other desks never see programme passes (a volunteer is told there is no pass for them)', atVolunteerDesk.result === 'REJECTED' && atVolunteerDesk.reason === 'NO_VALID_PASS', `${atVolunteerDesk.reason}: ${atVolunteerDesk.message}`);
                 const seatPass = await Pass.findById(seat.pass._id).lean();
                 const qr = require('../utils/passToken').encode(seatPass);
                 const notTheirs = await passes.scan(qr, collegeHost);
