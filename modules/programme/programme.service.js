@@ -122,7 +122,9 @@ const forYatra = async (eventIdOrSlug) => {
     if (!event) throw notFound('Yatra not found');
     // only what a visitor needs (no account ids or review details)
     const rows = await Programme.find({ eventId: event._id, status: 'APPROVED', date: { $gte: istDate() } }, 'title type date startTime endTime venue sector capacity registered description organiserName eventId').sort({ date: 1, startTime: 1 }).limit(100).lean();
-    return rows.map((p) => ({ ...p, placesLeft: Math.max(p.capacity - p.registered, 0) }));
+    // today's programmes that have already ended are not offered any more
+    const now = new Date();
+    return rows.filter((p) => istDateTime(p.date, p.endTime) > now).map((p) => ({ ...p, placesLeft: Math.max(p.capacity - p.registered, 0) }));
 };
 
 /** A pilgrim reserves free places (1 to 5) and gets a QR pass. Never more places than the capacity. */

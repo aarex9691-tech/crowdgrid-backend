@@ -244,11 +244,14 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     } else if (scanner.role === ROLES.KITCHEN_MANAGER) {
         hostScope = { $or: [{ type: 'MEAL', providerId: { $in: await ownKitchenProviderIds(scanner) } }, { type: 'PROGRAMME', refId: { $in: await ownProgrammeIds(scanner) } }] };
     }
+    // Programme passes belong to their organiser's desk (and the control room): every other desk
+    // (volunteers, trusts) never sees them, so they cannot cause a "choose" or a wrong message
+    const officer = scanner.role === ROLES.SUPER_ADMIN || scanner.role === ROLES.AUTHORITY;
+    if (!hostScope && !officer) hostScope = { $and: [{ type: { $ne: 'PROGRAMME' } }] };
     if (hostScope) Object.assign(filter, hostScope);
     // NGO admins and NGO volunteers only redeem passes for their own camps / kitchens (or passes with no provider)
     if (scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId)) {
         filter.$or = [{ providerId: scanner.providerId || null }, { providerId: null }, { providerId: { $exists: false } }];
-        filter.type = filter.type ? { $in: filter.type.$in.filter((t) => t !== 'PROGRAMME') } : { $ne: 'PROGRAMME' }; // programme passes belong to their organiser's desk
     }
     let candidates = await Pass.find(filter).sort({ validUntil: 1 }).populate('userId', 'name countryCode phone photoKey').lean();
 
@@ -258,8 +261,9 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     }
     if (!candidates.length) {
         const why = await whyNothingHere(holder._id, types, now, hostScope);
-        // a host's desk is told nothing about someone who has no ticket for its own events
-        if (hostScope && why.reason === 'NO_VALID_PASS') return { ...why, message: 'No ticket for your events', personal: true };
+        // a host's or kitchen's desk is told nothing about someone who has no pass for it
+        const ownDesk = HOST_PASS_TYPES[scanner.role] || scanner.role === ROLES.KITCHEN_MANAGER;
+        if (ownDesk && why.reason === 'NO_VALID_PASS') return { ...why, message: scanner.role === ROLES.KITCHEN_MANAGER ? 'No meal token or programme pass for your kitchen' : 'No ticket for your events', personal: true };
         return { ...why, holder: person, personal: true };
     }
     if (candidates.length > 1) {

@@ -36,7 +36,8 @@ const list = async ({ kind } = {}) => {
 
     const [camps, beds] = await Promise.all([
         Provider.aggregate([
-            { $match: { eventId: { $in: yatraIds }, verificationStatus: 'VERIFIED' } },
+            // seva camps (kitchen services are counted separately, so the camp count stays as before)
+            { $match: { eventId: { $in: yatraIds }, verificationStatus: 'VERIFIED', type: { $ne: 'KITCHEN' } } },
             { $group: { _id: '$eventId', count: { $sum: 1 } } },
         ]),
         // free beds on each yatra's next night (today, or its first night if it has not started)
