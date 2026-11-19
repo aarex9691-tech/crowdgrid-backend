@@ -13,11 +13,12 @@ const ROLES = Object.freeze({
     EVENT_HOST: 'EVENT_HOST', // verified organisation that hosts public events (concerts, aartis, walks)
     ORG_HOST: 'ORG_HOST', // verified organisation that hosts both (colleges, charities...)
     NGO_ADMIN: 'NGO_ADMIN', // NGO / Seva trust manager
+    KITCHEN_MANAGER: 'KITCHEN_MANAGER', // kitchen service recognised by the Super Admin; serves at yatras the control room approves
     VOLUNTEER: 'VOLUNTEER', // Ground volunteer / marshal
     USER: 'USER', // Pilgrim / Attendee (everyone starts here)
 });
 
-const { SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, VOLUNTEER, USER } = ROLES;
+const { SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, KITCHEN_MANAGER, VOLUNTEER, USER } = ROLES;
 const ALL = Object.values(ROLES);
 // Staff of the yatras (they may see contact numbers on missing-person reports). Organisation hosts
 // (corporate admins included, since anyone verified can become one) are not: they run their own
@@ -49,13 +50,21 @@ const PERMISSIONS = Object.freeze({
     // Organisations ask to host events; the Super Admin verifies them
     'host:apply': [USER],
     'host:review': [SUPER_ADMIN],
+    // Kitchen services: recognised once by the Super Admin, then approved per yatra by its control room
+    'kitchen:apply': [USER],
+    'kitchen:review': [SUPER_ADMIN],
+    'kitchen:serve': [KITCHEN_MANAGER],
+    'service:review': [SUPER_ADMIN, AUTHORITY],
+    // Programmes for pilgrims inside a yatra (bhandara, satsang, health camp...): the control room approves each
+    'programme:request': [KITCHEN_MANAGER, EVENT_HOST, ORG_HOST],
+    'programme:review': [SUPER_ADMIN, AUTHORITY],
 
     // Manage lodging / food inventory (NGO limited to its own NGO in the service)
     'inventory:manage': [SUPER_ADMIN, NGO_ADMIN],
     'inventory:view': [SUPER_ADMIN, AUTHORITY, NGO_ADMIN],
 
     // Scan QR entry / meal tokens
-    'pass:scan': [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, VOLUNTEER],
+    'pass:scan': [SUPER_ADMIN, AUTHORITY, CORPORATE_ADMIN, EVENT_HOST, ORG_HOST, NGO_ADMIN, KITCHEN_MANAGER, VOLUNTEER],
 
     // Book lodging / food passes / tickets: pilgrims and attendees only.
     // Admins and hosts run the event; they use their own dashboards and never book.

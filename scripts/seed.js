@@ -27,6 +27,8 @@ const { LaneStatus } = require('../modules/route/lane.model');
 const { SEED_STATUS } = require('../modules/route/network.nashik');
 const { VolunteerApplication } = require('../modules/volunteer/volunteer.model');
 const { HostApplication } = require('../modules/host/host.model');
+const { KitchenApplication, ServiceRequest } = require('../modules/kitchen/kitchen.model');
+const { Programme } = require('../modules/programme/programme.model');
 const SosIncident = require('../modules/sos/sos.model');
 const LostFoundReport = require('../modules/lostfound/lostfound.model');
 const { Photo: LostFoundPhoto } = require('../modules/lostfound/photo.model');
@@ -59,7 +61,7 @@ async function main() {
     await require('../utils/dns').connectMongo(mongoose, uri);
     console.log('Connected. Clearing CrowdGrid collections...');
 
-    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus, TransitRoute.TransitDay, HostApplication];
+    const models = [User, Event, Provider, Lodging, LodgingBooking, BedAssignment, LodgingNight, FoodCenter, FoodSlot, Pass, TransitRoute, VolunteerApplication, SosIncident, LostFoundReport, LostFoundPhoto, AuditLog, Order, LaneStatus, TransitRoute.TransitDay, HostApplication, KitchenApplication, ServiceRequest, Programme];
     for (const m of models) {
         await m.deleteMany({});
         await m.syncIndexes();
@@ -921,6 +923,82 @@ async function main() {
     await Event.updateOne({ slug: 'simhastha-csr-summit' }, { $set: { invitees: invite(['9000000006', '9000000007', ...pool.slice(0, 6).map((u) => u.phone)], ['csr.head@sahyadriinfra.example', 'water.panel@example.org']) } });
     await Event.updateOne({ slug: 'campus-crowd-safety-training' }, { $set: { invitees: invite(['9000000006', '9000000009', ...pool.slice(6, 14).map((u) => u.phone)], ['nss.coordinator@godavaricollege.edu.in']) } });
 
+    // ---------- Kitchen services and programmes for pilgrims ----------
+    // Recognised once by the Super Admin (Kitchen Manager), then approved per yatra by the District
+    // Control Room. Programmes for pilgrims are approved by the control room; pilgrims reserve free places.
+    const [kitchenManager, kitchenApplicant] = await User.insertMany([
+        mk('Meera Kulkarni', '9000000014', 'KITCHEN_MANAGER', { organisationName: 'Annapurna Annakshetra', createdAt: monthAgo }),
+        mk('Harish Bhandari', '9000000015', 'USER', { createdAt: monthAgo }),
+    ]);
+    const licence = demoDocument('FSSAI licence - DEMO', 'Sample licence seeded for the CrowdGrid demonstration.');
+    const licenceDoc = { data: licence, contentType: 'application/pdf', size: licence.length };
+    await KitchenApplication.insertMany([
+        {
+            applicantId: kitchenManager._id, orgName: 'Annapurna Annakshetra', orgType: 'TRUST', idType: 'FSSAI', idNumber: '11524033000417', idCheck: 'VALID',
+            city: 'Nashik', contactName: 'Meera Kulkarni', contactCountryCode: '91', contactPhone: '9000000014', mealsPerDay: 3000,
+            description: 'Free satvik meals for pilgrims three times a day, run by volunteers since 1998.', document: licenceDoc,
+            status: 'APPROVED', reviewedBy: superAdmin._id, reviewedAt: new Date(), activeIdKey: 'FSSAI:11524033000417',
+        },
+        {
+            applicantId: kitchenApplicant._id, orgName: 'Bhandari Langar Seva', orgType: 'COMMUNITY_KITCHEN', idType: 'FSSAI', idNumber: '21524011000932', idCheck: 'VALID',
+            city: 'Pune', contactName: 'Harish Bhandari', contactCountryCode: '91', contactPhone: '9000000015', mealsPerDay: 1200,
+            description: 'Community langar serving the wari and the Kumbh.', document: licenceDoc,
+            pendingFor: kitchenApplicant._id, activeIdKey: 'FSSAI:21524011000932',
+        },
+    ]);
+    const annapurna = await Provider.create({
+        name: 'Annapurna Annakshetra', type: 'KITCHEN', eventId: simhastha._id, adminUserId: kitchenManager._id,
+        verificationStatus: 'VERIFIED', verifiedBy: authority._id, verifiedAt: new Date(), description: 'Two langar lines near Tapovan.',
+    });
+    await ServiceRequest.insertMany([
+        { organiserId: kitchenManager._id, orgName: 'Annapurna Annakshetra', eventId: simhastha._id, sector: SECTORS.TAPOVAN, mealsPerDay: 2500, note: 'Two langar lines near Tapovan.', status: 'APPROVED', reviewedBy: authority._id, reviewedAt: new Date(), providerId: annapurna._id, openKey: `${kitchenManager._id}:${simhastha._id}` },
+        // waiting for the control room: the same kitchen asks to serve at the Pandharpur wari too
+        { organiserId: kitchenManager._id, orgName: 'Annapurna Annakshetra', eventId: wari._id, mealsPerDay: 1500, note: 'Annadan at the Wakhari palkhi halt.', openKey: `${kitchenManager._id}:${wari._id}` },
+    ]);
+    const annapurnaKitchen = await FoodCenter.create({ eventId: simhastha._id, providerId: annapurna._id, name: 'Annapurna Langar', sector: SECTORS.TAPOVAN, menu: ['Khichdi', 'Puri-Bhaji', 'Kadhi'], diet: 'Satvik (no onion, no garlic)', location: { lat: 20.0098, lng: 73.8049 } });
+    const kSlots = [];
+    for (let d = 0; d < 5; d++) {
+        for (const meal of Object.keys(MEALS)) {
+            const capacity = { BREAKFAST: 500, LUNCH: 900, DINNER: 700 }[meal];
+            kSlots.push({ foodCenterId: annapurnaKitchen._id, eventId: simhastha._id, date: addDays(today, d), meal, startTime: MEALS[meal].start, endTime: MEALS[meal].end, capacity, remaining: d === 0 ? Math.round(capacity * 0.4) : capacity });
+        }
+    }
+    await FoodSlot.insertMany(kSlots);
+
+    const programmeRows = await Programme.insertMany([
+        {
+            eventId: simhastha._id, organiserId: kitchenManager._id, organiserName: 'Annapurna Annakshetra', title: 'Maha Bhandara at Tapovan', type: 'BHANDARA',
+            date: addDays(today, 1), startTime: '12:00', endTime: '15:00', venue: 'Annapurna langar ground, Tapovan', sector: SECTORS.TAPOVAN, capacity: 400,
+            description: 'A free feast for pilgrims and sadhus: puri-bhaji, khichdi and kheer. Seating in rows on the ground; carry a water bottle.',
+            status: 'APPROVED', reviewedBy: authority._id, reviewedAt: new Date(),
+        },
+        {
+            eventId: simhastha._id, organiserId: kitchenManager._id, organiserName: 'Annapurna Annakshetra', title: 'Free health check for elderly pilgrims', type: 'HEALTH_CAMP',
+            date: addDays(today, 2), startTime: '09:00', endTime: '13:00', venue: 'Annapurna tent 2, Tapovan', sector: SECTORS.TAPOVAN, capacity: 120,
+            description: 'Blood pressure, sugar and eye checks by volunteer doctors. Bring your medicines list.',
+            status: 'APPROVED', reviewedBy: authority._id, reviewedAt: new Date(),
+        },
+        {
+            eventId: simhastha._id, organiserId: orgHost._id, organiserName: 'Godavari College of Arts and Science', title: 'Satsang and kirtan by the college choir', type: 'SATSANG',
+            date: addDays(today, 3), startTime: '18:30', endTime: '20:30', venue: 'Panchavati open stage', capacity: 300,
+            description: 'An evening of abhangs and bhajans by 40 students. Free; seats on durries.',
+        },
+    ]);
+    // a few pilgrims have already reserved places at the bhandara
+    const bhandara = programmeRows[0];
+    const reservations = pool.slice(14, 22).map((who, i) => {
+        const people = 1 + (i % 4);
+        return {
+            type: 'PROGRAMME', userId: who._id, eventId: simhastha._id, refId: bhandara._id, title: bhandara.title,
+            subtitle: `${bhandara.venue} - ${bhandara.date}, ${bhandara.startTime} to ${bhandara.endTime}`,
+            details: { venue: bhandara.venue, sector: bhandara.sector, date: bhandara.date, startTime: bhandara.startTime, endTime: bhandara.endTime, people, organiser: bhandara.organiserName, free: true },
+            validFrom: new Date(istDateTime(bhandara.date, bhandara.startTime).getTime() - 3600000), validUntil: istDateTime(bhandara.date, bhandara.endTime),
+            singleUse: true, nonce: passToken.newNonce(), dedupeKey: `PROGRAMME:${bhandara._id}:${who._id}`,
+        };
+    });
+    await Pass.insertMany(reservations);
+    await Programme.updateOne({ _id: bhandara._id }, { $set: { registered: reservations.reduce((n, r) => n + r.details.people, 0) } });
+
     console.log('\nSeed complete. All demo accounts use SEED_PASSWORD from .env.');
     console.table([
         { role: 'SUPER_ADMIN', phone: '9000000001', name: superAdmin.name },
@@ -936,6 +1014,8 @@ async function main() {
         { role: 'ORG_HOST', phone: '9000000011', name: `${orgHost.name} (Godavari College, public + campus events)` },
         { role: 'USER', phone: '9000000012', name: `${hostApplicant.name} (host request waiting for the Super Admin)` },
         { role: 'USER', phone: '9000000013', name: `${hostRejected.name} (host request not approved; can apply again)` },
+        { role: 'KITCHEN_MANAGER', phone: '9000000014', name: `${kitchenManager.name} (Annapurna Annakshetra: approved at the Simhastha, waiting at the wari)` },
+        { role: 'USER', phone: '9000000015', name: `${kitchenApplicant.name} (kitchen service waiting for the Super Admin)` },
     ]);
     console.log(`Campus access code for "Crowd Safety Volunteer Training": ${campusCode}`);
     console.log(`Public-event bookings: ${tickets.length} (by ${pool.length} demo pilgrims, phones 9000030100-9000030129). Invited to both campus/corporate events: 9000000006 (Ramesh).`);

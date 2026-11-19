@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
  * pass, public entry pass, corporate badge or volunteer ID. One collection
  * means one passbook query and one scanner endpoint.
  */
-const PASS_TYPES = ['LODGING', 'MEAL', 'TRANSIT', 'PUBLIC', 'CORPORATE', 'VOLUNTEER'];
+const PASS_TYPES = ['LODGING', 'MEAL', 'TRANSIT', 'PUBLIC', 'CORPORATE', 'VOLUNTEER', 'PROGRAMME']; // PROGRAMME: free place at a programme for pilgrims
 
 const passSchema = new mongoose.Schema(
     {

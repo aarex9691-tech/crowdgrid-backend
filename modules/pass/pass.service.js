@@ -4,6 +4,7 @@ const { ROLES } = require('../../config/roles');
 const { badRequest } = require('../../utils/httpError');
 const realtime = require('../../utils/realtime');
 const User = require('../auth/user.model');
+const Provider = require('../provider/provider.model');
 const audit = require('../audit/audit.service');
 
 /** Creates a pass (inside the caller's transaction when `session` is given). */
@@ -97,7 +98,28 @@ const ownEventIds = async (scanner) => (await Event.find({ organizerId: scanner.
  *  - the control room and general volunteers, any pass.
  * Returns a REJECTED result, or null when the scanner may redeem it.
  */
+/** Programmes this account holds (a programme pass is checked in only by its organiser or the control room). */
+const ownProgrammeIds = async (scanner) => {
+    const { Programme } = require('../programme/programme.model'); // required here: programme.service requires this file
+    return (await Programme.find({ organiserId: scanner._id }, '_id').lean()).map((x) => x._id);
+};
+/** The verified kitchen organisations (one per approved yatra) of a Kitchen Manager. */
+const ownKitchenProviderIds = async (scanner) => (await Provider.find({ adminUserId: scanner._id, type: 'KITCHEN', verificationStatus: 'VERIFIED' }, '_id').lean()).map((x) => x._id);
+
 const scopeError = async (pass, scanner) => {
+    const officer = scanner.role === ROLES.SUPER_ADMIN || scanner.role === ROLES.AUTHORITY;
+    // Programmes for pilgrims: only their organiser's desk (or the control room) checks people in
+    if (pass.type === 'PROGRAMME' && !officer) {
+        const mine = (await ownProgrammeIds(scanner)).some((id) => String(id) === String(pass.refId));
+        return mine ? null : { result: 'REJECTED', reason: 'WRONG_EVENT', message: 'This pass is for another organiser\'s programme', pass: summary(pass) };
+    }
+    // Kitchen Managers: meal tokens of their own kitchens (and their programmes, above) only
+    if (scanner.role === ROLES.KITCHEN_MANAGER) {
+        if (pass.type !== 'MEAL') return { result: 'REJECTED', reason: 'WRONG_SERVICE', message: 'This desk checks meal tokens and programme passes only. Send them to the right counter.', pass: summary(pass) };
+        const own = (await ownKitchenProviderIds(scanner)).some((id) => String(id) === String(pass.providerId));
+        if (!own) return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
+        return null;
+    }
     const servesNgo = scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId);
     if (servesNgo && pass.providerId && String(pass.providerId) !== String(scanner.providerId)) {
         return { result: 'REJECTED', reason: 'WRONG_PROVIDER', message: 'This pass belongs to another camp or kitchen', pass: summary(pass) };
@@ -214,8 +236,14 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     const filter = { userId: holder._id, status: 'ACTIVE', validFrom: { $lte: now }, validUntil: { $gte: now } };
     const types = SERVICE_TYPES[String(service).toUpperCase()] ?? null;
     if (types) filter.type = { $in: types };
-    // a host's desk only ever looks at tickets for its own events
-    const hostScope = HOST_PASS_TYPES[scanner.role] ? { type: { $in: HOST_PASS_TYPES[scanner.role] }, eventId: { $in: await ownEventIds(scanner) } } : null;
+    // a host's desk only ever looks at tickets for its own events (and its own programmes for pilgrims);
+    // a Kitchen Manager's desk only at meal tokens of its kitchens and its own programmes
+    let hostScope = null;
+    if (HOST_PASS_TYPES[scanner.role]) {
+        hostScope = { $or: [{ type: { $in: HOST_PASS_TYPES[scanner.role] }, eventId: { $in: await ownEventIds(scanner) } }, { type: 'PROGRAMME', refId: { $in: await ownProgrammeIds(scanner) } }] };
+    } else if (scanner.role === ROLES.KITCHEN_MANAGER) {
+        hostScope = { $or: [{ type: 'MEAL', providerId: { $in: await ownKitchenProviderIds(scanner) } }, { type: 'PROGRAMME', refId: { $in: await ownProgrammeIds(scanner) } }] };
+    }
     if (hostScope) Object.assign(filter, hostScope);
     // NGO admins and NGO volunteers only redeem passes for their own camps / kitchens (or passes with no provider)
     if (scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId)) {

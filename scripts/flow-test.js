@@ -1008,7 +1008,7 @@ async function main() {
             const otherYatra = await Event.findOne({ kind: 'YATRA', _id: { $ne: event._id }, status: 'ACTIVE' }).lean();
             const cleanKitchen = async () => {
                 const ids = (await User.find({ phone: { $in: [KP, PP] } }, '_id').lean()).map((u) => u._id);
-                const progIds = (await Programme.find({ $or: [{ organiserId: { $in: [...ids, orgRow._id] } }, { title: /^Flow Test/ }] }, '_id').lean()).map((x) => x._id);
+                const progIds = (await Programme.find({ $or: [{ organiserId: { $in: ids } }, { title: /^Flow Test/ }] }, '_id').lean()).map((x) => x._id);
                 const provIds = (await Provider.find({ adminUserId: { $in: ids } }, '_id').lean()).map((x) => x._id);
                 const centerIds = (await FoodCenter.find({ providerId: { $in: provIds } }, '_id').lean()).map((x) => x._id);
                 await Promise.all([

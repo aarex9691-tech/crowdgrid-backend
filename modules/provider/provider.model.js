@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const providerSchema = new mongoose.Schema(
     {
         name: { type: String, required: true, trim: true },
-        type: { type: String, enum: ['NGO', 'TRUST', 'ASHRAM', 'GOVT'], default: 'NGO' },
+        type: { type: String, enum: ['NGO', 'TRUST', 'ASHRAM', 'GOVT', 'KITCHEN'], default: 'NGO' }, // KITCHEN: a recognised kitchen service at one yatra
         eventId: { type: mongoose.Schema.Types.ObjectId, ref: 'Event', required: true },
         adminUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         registrationNumber: String,

@@ -88,6 +88,8 @@ app.use('/api/auth', require('./modules/auth/auth.routes'));
 app.use('/api/events', require('./modules/event/event.routes'));
 app.use('/api/providers', require('./modules/provider/provider.routes'));
 app.use('/api/hosts', require('./modules/host/host.routes'));
+app.use('/api/kitchens', require('./modules/kitchen/kitchen.routes'));
+app.use('/api/programmes', require('./modules/programme/programme.routes'));
 app.use('/api/lodgings', require('./modules/lodging/lodging.routes'));
 app.use('/api/food', require('./modules/food/food.routes'));
 app.use('/api/transit', require('./modules/transit/transit.routes'));
