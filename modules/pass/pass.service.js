@@ -248,6 +248,7 @@ const scanPersonal = async (qr, scanner, { service = 'ANY', passId } = {}) => {
     // NGO admins and NGO volunteers only redeem passes for their own camps / kitchens (or passes with no provider)
     if (scanner.role === ROLES.NGO_ADMIN || (scanner.role === ROLES.VOLUNTEER && scanner.providerId)) {
         filter.$or = [{ providerId: scanner.providerId || null }, { providerId: null }, { providerId: { $exists: false } }];
+        filter.type = filter.type ? { $in: filter.type.$in.filter((t) => t !== 'PROGRAMME') } : { $ne: 'PROGRAMME' }; // programme passes belong to their organiser's desk
     }
     let candidates = await Pass.find(filter).sort({ validUntil: 1 }).populate('userId', 'name countryCode phone photoKey').lean();
 

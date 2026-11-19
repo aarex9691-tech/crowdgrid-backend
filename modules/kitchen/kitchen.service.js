@@ -221,6 +221,7 @@ const decideService = async (id, reviewer, { decision, reason } = {}) => {
     if (!mongoose.isValidObjectId(id)) throw notFound('Request not found');
     const current = await ServiceRequest.findOne({ _id: id, status: 'PENDING' }).lean();
     if (!current) throw conflict('This request was already reviewed, or does not exist');
+    if (decision === 'APPROVED') eventWindow.assertOpen(await yatraOrThrow(current.eventId)); // not for a yatra that has closed
     const organiser = await User.findById(current.organiserId, 'role organisationName name').lean();
     if (decision === 'APPROVED' && organiser?.role !== ROLES.KITCHEN_MANAGER) throw conflict('This account is no longer a recognised kitchen service');
 
@@ -293,6 +294,7 @@ const dashboard = async (user, eventId) => {
 
 const addKitchen = async (user, eventId, body = {}) => {
     const provider = await providerAt(user, eventId);
+    if ((await FoodCenter.countDocuments({ providerId: provider._id })) >= 30) throw badRequest('A kitchen service can list at most 30 kitchens at one yatra');
     if (!body.sector || typeof body.sector !== 'string') throw badRequest('Choose the sector the kitchen is in');
     return ngo.addFoodCenter(asOrganisation(user, provider), { name: body.name, sector: body.sector.slice(0, 80), menu: body.menu });
 };

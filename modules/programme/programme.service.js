@@ -48,12 +48,14 @@ const request = async (user, body = {}) => {
     const type = String(body.type || '').toUpperCase();
     if (!TYPES.includes(type)) throw badRequest('Choose the kind of programme');
     eventWindow.assertDay(event, body.date); // a day of the yatra that has not passed
-    if (!HHMM.test(String(body.startTime)) || !HHMM.test(String(body.endTime))) throw badRequest('Give the start and end time like 12:00');
+    if (typeof body.startTime !== 'string' || typeof body.endTime !== 'string' || !HHMM.test(body.startTime) || !HHMM.test(body.endTime)) throw badRequest('Give the start and end time like 12:00');
     if (body.endTime <= body.startTime) throw badRequest('The programme must end after it starts');
     const venue = v.text(body.venue, 'Place', 'venue', { required: true });
     const sector = body.sector ? v.text(body.sector, 'Sector', 'campName') : undefined;
     const capacity = v.int(body.capacity, 'Places for pilgrims', { min: 1, max: 5000, required: true });
     const description = v.text(body.description, 'About the programme', 'longText');
+    // a limit on requests waiting at once, so one account cannot flood the control room
+    if ((await Programme.countDocuments({ organiserId: user._id, status: 'PENDING' })) >= 20) throw badRequest('You have 20 programmes waiting for review. Wait for decisions before asking for more.');
     const programme = await Programme.create({
         eventId: event._id,
         organiserId: user._id,
@@ -90,6 +92,15 @@ const decide = async (id, reviewer, { decision, reason } = {}) => {
         rejectionReason = reason.trim().slice(0, 300);
     }
     if (!mongoose.isValidObjectId(id)) throw notFound('Programme not found');
+    if (decision === 'APPROVED') {
+        // never approve a programme for a yatra that has closed, or a day that has passed
+        const pending = await Programme.findById(id, 'eventId date').lean();
+        if (pending) {
+            const event = await yatraOrThrow(pending.eventId);
+            eventWindow.assertOpen(event);
+            eventWindow.assertDay(event, pending.date);
+        }
+    }
     const updated = await Programme.findOneAndUpdate(
         { _id: id, status: 'PENDING' },
         { $set: { status: decision, reviewedBy: reviewer._id, reviewedAt: new Date(), ...(rejectionReason ? { rejectionReason } : {}) } },
@@ -109,7 +120,8 @@ const forYatra = async (eventIdOrSlug) => {
     const key = String(eventIdOrSlug || '');
     const event = mongoose.isValidObjectId(key) ? await Event.findById(key, '_id').lean() : await Event.findOne({ slug: key.toLowerCase().slice(0, 120) }, '_id').lean();
     if (!event) throw notFound('Yatra not found');
-    const rows = await Programme.find({ eventId: event._id, status: 'APPROVED', date: { $gte: istDate() } }, '-reviewedBy -rejectionReason').sort({ date: 1, startTime: 1 }).limit(100).lean();
+    // only what a visitor needs (no account ids or review details)
+    const rows = await Programme.find({ eventId: event._id, status: 'APPROVED', date: { $gte: istDate() } }, 'title type date startTime endTime venue sector capacity registered description organiserName eventId').sort({ date: 1, startTime: 1 }).limit(100).lean();
     return rows.map((p) => ({ ...p, placesLeft: Math.max(p.capacity - p.registered, 0) }));
 };
 
