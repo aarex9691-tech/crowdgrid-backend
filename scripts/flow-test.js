@@ -1083,6 +1083,8 @@ async function main() {
                 await programmes.decide(prog._id, desk, { decision: 'APPROVED' });
                 const listed = (await programmes.forYatra(event._id)).find((x) => String(x._id) === String(prog._id));
                 check('Approved: shown on the yatra page with the organiser\'s name', listed?.organiserName === kitchenForm.orgName && listed.placesLeft === 2, JSON.stringify(listed));
+                check('The public programme list does not expose account ids or review details', listed && !('organiserId' in listed) && !('reviewedAt' in listed));
+                await expectError('Times must be plain text like 12:00', () => programmes.request(km, { ...progForm, startTime: ['12:00'] }), 400);
 
                 // 5. Free registration with a QR, scanned by the organiser
                 const seat = await programmes.register(prog._id, yatri, { people: 2 });
