@@ -192,7 +192,7 @@ const SERVICE_TYPES = {
     FOOD: ['MEAL'],
     LODGING: ['LODGING'],
     TRANSIT: ['TRANSIT'],
-    ENTRY: ['PUBLIC', 'CORPORATE'],
+    ENTRY: ['PUBLIC', 'CORPORATE', 'PROGRAMME'], // programmes for pilgrims are an entry too
     VOLUNTEER: ['VOLUNTEER'],
 };
 
