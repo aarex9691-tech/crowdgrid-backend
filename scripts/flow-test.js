@@ -1084,7 +1084,8 @@ async function main() {
                 const trustRow = await User.findOne({ phone: '9000000003' }).lean();
                 const trustAdmin = { ...trustRow, id: String(trustRow._id) };
                 const trustProg = await programmes.request(trustAdmin, { ...progForm, title: 'Flow Test Seva Trust Satsang', type: 'SATSANG', capacity: 40 });
-                check('A verified NGO or trust can ask to hold a programme for pilgrims', trustProg.status === 'PENDING' && trustProg.organiserName === (trustRow.organisationName || trustRow.name), trustProg.organiserName);
+                const trustOrg = await Provider.findById(trustRow.providerId).lean();
+                check('A verified NGO or trust can ask to hold a programme, shown under the trust\'s name', trustProg.status === 'PENDING' && trustProg.organiserName === trustOrg?.name, trustProg.organiserName);
                 if (otherYatra) await expectError('A trust holds programmes only at the yatra it is verified for', () => programmes.request(trustAdmin, { ...progForm, eventId: String(otherYatra._id) }), 403);
                 await programmes.decide(prog._id, desk, { decision: 'APPROVED' });
                 const listed = (await programmes.forYatra(event._id)).find((x) => String(x._id) === String(prog._id));

@@ -30,12 +30,21 @@ const yatraOrThrow = async (eventId) => {
     return event;
 };
 
-/** A kitchen service holds programmes only where the control room approved it to serve. */
+/**
+ * Who may hold a programme at this yatra, and under which name:
+ *   approved event hosts anywhere; a kitchen service only where the control room approved it;
+ *   an NGO or trust only at the yatra the control room verified it for (under the trust's name).
+ */
 const assertMayHold = async (user, eventId) => {
-    if (HOSTS.includes(user.role)) return;
+    if (HOSTS.includes(user.role)) return user.organisationName || user.name;
     if (user.role === ROLES.KITCHEN_MANAGER) {
-        if (await Provider.exists({ adminUserId: user._id, eventId, type: 'KITCHEN', verificationStatus: 'VERIFIED' })) return;
+        if (await Provider.exists({ adminUserId: user._id, eventId, type: 'KITCHEN', verificationStatus: 'VERIFIED' })) return user.organisationName || user.name;
         throw forbidden('The District Control Room has not approved your kitchen for this yatra yet');
+    }
+    if (user.role === ROLES.NGO_ADMIN) {
+        const trust = mongoose.isValidObjectId(user.providerId) ? await Provider.findOne({ _id: user.providerId, eventId, verificationStatus: 'VERIFIED' }, 'name').lean() : null;
+        if (trust) return trust.name;
+        throw forbidden('Your organisation is verified for another yatra: hold programmes there');
     }
     throw forbidden('Only recognised organisations can hold programmes for pilgrims');
 };
@@ -43,7 +52,7 @@ const assertMayHold = async (user, eventId) => {
 const request = async (user, body = {}) => {
     const event = await yatraOrThrow(body.eventId);
     eventWindow.assertOpen(event);
-    await assertMayHold(user, event._id);
+    const organiserName = await assertMayHold(user, event._id);
     const title = v.text(body.title, 'Title', 'title', { required: true });
     const type = String(body.type || '').toUpperCase();
     if (!TYPES.includes(type)) throw badRequest('Choose the kind of programme');
@@ -59,7 +68,7 @@ const request = async (user, body = {}) => {
     const programme = await Programme.create({
         eventId: event._id,
         organiserId: user._id,
-        organiserName: user.organisationName || user.name,
+        organiserName,
         title,
         type,
         date: body.date,

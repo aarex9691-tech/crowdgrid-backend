@@ -56,7 +56,7 @@ const PERMISSIONS = Object.freeze({
     'kitchen:serve': [KITCHEN_MANAGER],
     'service:review': [SUPER_ADMIN, AUTHORITY],
     // Programmes for pilgrims inside a yatra (bhandara, satsang, health camp...): the control room approves each
-    'programme:request': [KITCHEN_MANAGER, EVENT_HOST, ORG_HOST],
+    'programme:request': [KITCHEN_MANAGER, NGO_ADMIN, EVENT_HOST, ORG_HOST],
     'programme:review': [SUPER_ADMIN, AUTHORITY],
 
     // Manage lodging / food inventory (NGO limited to its own NGO in the service)
