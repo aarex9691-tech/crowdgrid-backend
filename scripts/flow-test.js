@@ -985,6 +985,128 @@ async function main() {
         await expectError('Staff cannot reset their own password at the help desk', () => helpdesk.reset(deskStaff, deskUser._id), 403);
         check('Only the control room and volunteers can list SOS alerts (not NGO or corporate admins)', hasPermission('AUTHORITY', 'sos:view') && hasPermission('VOLUNTEER', 'sos:view') && !hasPermission('NGO_ADMIN', 'sos:view') && !hasPermission('CORPORATE_ADMIN', 'sos:view'));
         {
+            // ---- Kitchen services and programmes for pilgrims ----
+            // The Super Admin recognises a kitchen service once; for each yatra it asks that yatra's
+            // District Control Room; approved organisations (and approved event hosts) ask the control
+            // room to hold programmes for pilgrims, who reserve a free place with a QR.
+            const kitchens = require('../modules/kitchen/kitchen.service');
+            const programmes = require('../modules/programme/programme.service');
+            const { KitchenApplication, ServiceRequest } = require('../modules/kitchen/kitchen.model');
+            const { Programme } = require('../modules/programme/programme.model');
+            const { FoodCenter, FoodSlot } = require('../modules/food/food.model');
+            const { hasPermission } = require('../config/roles');
+            const Provider = require('../modules/provider/provider.model');
+            const rameshRow = await User.findOne({ phone: '9000000006' }).lean();
+            const KP = '6999999989';
+            const PP = '6999999988';
+            const saRow = await User.findOne({ phone: '9000000001' }).lean();
+            const sa = { ...saRow, id: String(saRow._id) };
+            const deskRow = await User.findOne({ phone: '9000000002' }).lean();
+            const desk = { ...deskRow, id: String(deskRow._id) };
+            const orgRow = await User.findOne({ phone: '9000000011' }).lean();
+            const collegeHost = { ...orgRow, id: String(orgRow._id) };
+            const otherYatra = await Event.findOne({ kind: 'YATRA', _id: { $ne: event._id }, status: 'ACTIVE' }).lean();
+            const cleanKitchen = async () => {
+                const ids = (await User.find({ phone: { $in: [KP, PP] } }, '_id').lean()).map((u) => u._id);
+                const progIds = (await Programme.find({ $or: [{ organiserId: { $in: [...ids, orgRow._id] } }, { title: /^Flow Test/ }] }, '_id').lean()).map((x) => x._id);
+                const provIds = (await Provider.find({ adminUserId: { $in: ids } }, '_id').lean()).map((x) => x._id);
+                const centerIds = (await FoodCenter.find({ providerId: { $in: provIds } }, '_id').lean()).map((x) => x._id);
+                await Promise.all([
+                    KitchenApplication.deleteMany({ applicantId: { $in: ids } }),
+                    ServiceRequest.deleteMany({ organiserId: { $in: ids } }),
+                    Pass.deleteMany({ $or: [{ userId: { $in: ids } }, { refId: { $in: progIds } }] }),
+                    Programme.deleteMany({ _id: { $in: progIds } }),
+                    FoodSlot.deleteMany({ foodCenterId: { $in: centerIds } }),
+                    FoodCenter.deleteMany({ _id: { $in: centerIds } }),
+                    Provider.deleteMany({ _id: { $in: provIds } }),
+                ]);
+                await User.deleteMany({ _id: { $in: ids } });
+            };
+            await cleanKitchen();
+            try {
+                check('Kitchen services are recognised by the Super Admin only', hasPermission('SUPER_ADMIN', 'kitchen:review') && !hasPermission('AUTHORITY', 'kitchen:review'));
+                check('Each yatra\'s District Control Room approves who serves there and the programmes for pilgrims', hasPermission('AUTHORITY', 'service:review') && hasPermission('AUTHORITY', 'programme:review') && !hasPermission('KITCHEN_MANAGER', 'programme:review'));
+                await auth.register({ name: 'Flow Test Annakshetra', phone: KP, countryCode: '91', password: 'Crowd@123' });
+                await auth.register({ name: 'Flow Test Yatri', phone: PP, countryCode: '91', password: 'Crowd@123' });
+                const kRow = await User.findOne({ phone: KP }).lean();
+                const applicant = { ...kRow, id: String(kRow._id) };
+                const pRow = await User.findOne({ phone: PP }).lean();
+                const yatri = { ...pRow, id: String(pRow._id) };
+                const pdf = Buffer.from('%PDF-1.4\n% flow test certificate\n');
+                const kitchenForm = {
+                    orgName: 'Flow Test Annakshetra Trust', orgType: 'TRUST', idType: 'FSSAI', idNumber: '11521999000123', city: 'Nashik',
+                    contactName: 'Flow Tester', contactPhone: KP, mealsPerDay: 1500, description: 'Free satvik meals for pilgrims, three times a day.',
+                };
+
+                // 1. Recognition by the Super Admin
+                await expectError('A kitchen service needs its certificate', () => kitchens.apply(applicant, kitchenForm, null), 400, /certificate/i);
+                await expectError('An FSSAI licence number has 14 digits', () => kitchens.apply(applicant, { ...kitchenForm, idNumber: '12345' }, pdf), 400, /FSSAI|14/i);
+                const kApp = await kitchens.apply(applicant, kitchenForm, pdf);
+                check('A kitchen service applies once and waits for the Super Admin', kApp.status === 'PENDING' && !kApp.document?.data);
+                await expectError('Only one recognition request at a time', () => kitchens.apply(applicant, kitchenForm, pdf), 409);
+                check('The Super Admin sees the request with its checks', (await kitchens.list({ status: 'PENDING' })).some((a) => String(a._id) === String(kApp._id) && a.checks?.idFormat === 'VALID'));
+                await expectError('Rejecting needs a written reason', () => kitchens.decide(kApp._id, sa, { decision: 'REJECTED' }), 400, /reason/i);
+                await kitchens.decide(kApp._id, sa, { decision: 'APPROVED' });
+                const kmRow = await User.findById(kRow._id).lean();
+                check('Recognised: the account becomes a Kitchen Manager for its organisation', kmRow.role === 'KITCHEN_MANAGER' && kmRow.organisationName === kitchenForm.orgName, kmRow.role);
+                const km = { ...kmRow, id: String(kmRow._id) };
+
+                // 2. A request for each yatra, decided by the District Control Room
+                await expectError('A kitchen cannot manage a yatra before the control room approves it', () => kitchens.dashboard(km, event._id), 403);
+                const sreq = await kitchens.requestService(km, { eventId: String(event._id), sector: 'Tapovan', mealsPerDay: 800, note: 'Two langar lines near Tapovan.' });
+                check('The Kitchen Manager asks to serve at a yatra', sreq.status === 'PENDING' && String(sreq.eventId) === String(event._id));
+                await expectError('One request per yatra at a time', () => kitchens.requestService(km, { eventId: String(event._id), sector: 'Tapovan', mealsPerDay: 800 }), 409);
+                check('The District Control Room sees the request', (await kitchens.listServiceRequests(desk, { status: 'PENDING' })).some((r) => String(r._id) === String(sreq._id)));
+                await kitchens.decideService(sreq._id, desk, { decision: 'APPROVED' });
+                const prov = await Provider.findOne({ adminUserId: kRow._id, eventId: event._id }).lean();
+                check('Approved: the kitchen is a verified organisation at this yatra only', prov?.verificationStatus === 'VERIFIED' && prov.type === 'KITCHEN');
+
+                // 3. Kitchen dashboard for that yatra
+                const center = await kitchens.addKitchen(km, event._id, { name: 'Flow Test Langar', sector: 'Tapovan', menu: 'Dal, rice, roti' });
+                const day = istDate() >= istDate(event.startDate) ? istDate() : istDate(event.startDate);
+                await kitchens.setMealQuota(km, event._id, center._id, { date: day, meal: 'LUNCH', capacity: 300 });
+                const dash = await kitchens.dashboard(km, event._id);
+                const lunch = dash.kitchens.find((c) => String(c._id) === String(center._id))?.slots.find((sl) => sl.meal === 'LUNCH');
+                check('The kitchen dashboard shows each meal with tokens left and meals served', lunch?.capacity === 300 && lunch.remaining === 300 && lunch.served === 0, JSON.stringify(lunch));
+                if (otherYatra) await expectError('Another yatra needs its own approval', () => kitchens.dashboard(km, otherYatra._id), 403);
+
+                // 4. Programmes for pilgrims, approved by the control room
+                const progForm = { eventId: String(event._id), title: 'Flow Test Bhandara', type: 'BHANDARA', date: day, startTime: '12:00', endTime: '14:00', venue: 'Tapovan langar ground', sector: 'Tapovan', capacity: 2, description: 'A free feast for pilgrims.' };
+                await expectError('A programme must fall on a day of the yatra', () => programmes.request(km, { ...progForm, date: '2099-01-01' }), 400);
+                if (otherYatra) await expectError('A kitchen holds programmes only at a yatra it is approved for', () => programmes.request(km, { ...progForm, eventId: String(otherYatra._id) }), 403);
+                const prog = await programmes.request(km, progForm);
+                check('The programme waits for the District Control Room', prog.status === 'PENDING');
+                check('Not shown to pilgrims before approval', !(await programmes.forYatra(event._id)).some((x) => String(x._id) === String(prog._id)));
+                const hostProg = await programmes.request(collegeHost, { ...progForm, title: 'Flow Test Bhajan Sandhya', type: 'BHAJAN', capacity: 50 });
+                check('An approved event host can also ask to hold a programme for pilgrims', hostProg.status === 'PENDING');
+                check('Pilgrims cannot ask to hold programmes', !hasPermission('USER', 'programme:request'));
+                await programmes.decide(prog._id, desk, { decision: 'APPROVED' });
+                const listed = (await programmes.forYatra(event._id)).find((x) => String(x._id) === String(prog._id));
+                check('Approved: shown on the yatra page with the organiser\'s name', listed?.organiserName === kitchenForm.orgName && listed.placesLeft === 2, JSON.stringify(listed));
+
+                // 5. Free registration with a QR, scanned by the organiser
+                const seat = await programmes.register(prog._id, yatri, { people: 2 });
+                check('A pilgrim reserves free places and gets a QR pass', seat.pass?.type === 'PROGRAMME' && seat.pass.details?.people === 2);
+                await expectError('One reservation per person per programme', () => programmes.register(prog._id, yatri, { people: 1 }), 409);
+                await expectError('No places beyond the capacity', () => programmes.register(prog._id, { ...rameshRow, id: String(rameshRow._id) }, { people: 1 }), 409, /full|places/i);
+                await expectError('A programme not yet approved takes no reservations', () => programmes.register(hostProg._id, yatri, { people: 1 }), 400);
+                const people = await programmes.attendees(prog._id, km);
+                check('The organiser sees who registered (phone masked)', people.length === 1 && people[0].name === yatri.name && /•/.test(people[0].phone), JSON.stringify(people));
+                await expectError('Another organisation cannot see who registered', () => programmes.attendees(prog._id, collegeHost), 403);
+                const seatPass = await Pass.findById(seat.pass._id).lean();
+                const qr = require('../utils/passToken').encode(seatPass);
+                const notTheirs = await passes.scan(qr, collegeHost);
+                check('Another organiser\'s desk cannot check in this programme', notTheirs.result === 'REJECTED', notTheirs.reason);
+                if (new Date() >= seatPass.validFrom && new Date() <= seatPass.validUntil) {
+                    const inAt = await passes.scan(qr, km);
+                    check('The organiser scans the QR at the entrance', inAt.result === 'VALID', inAt.message);
+                }
+            } finally {
+                await cleanKitchen();
+            }
+        }
+
+        {
             // ---- Seva volunteers: ID at registration, approval by the District Control Room, ID shown in person ----
             const volunteers = require('../modules/volunteer/volunteer.service');
             const duties = require('../modules/volunteer/duty.service');
