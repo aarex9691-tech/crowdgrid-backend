@@ -1080,6 +1080,12 @@ async function main() {
                 const hostProg = await programmes.request(collegeHost, { ...progForm, title: 'Flow Test Bhajan Sandhya', type: 'BHAJAN', capacity: 50 });
                 check('An approved event host can also ask to hold a programme for pilgrims', hostProg.status === 'PENDING');
                 check('Pilgrims cannot ask to hold programmes', !hasPermission('USER', 'programme:request'));
+                // NGOs and trusts verified by the control room can ask too, at the yatra they are verified for
+                const trustRow = await User.findOne({ phone: '9000000003' }).lean();
+                const trustAdmin = { ...trustRow, id: String(trustRow._id) };
+                const trustProg = await programmes.request(trustAdmin, { ...progForm, title: 'Flow Test Seva Trust Satsang', type: 'SATSANG', capacity: 40 });
+                check('A verified NGO or trust can ask to hold a programme for pilgrims', trustProg.status === 'PENDING' && trustProg.organiserName === (trustRow.organisationName || trustRow.name), trustProg.organiserName);
+                if (otherYatra) await expectError('A trust holds programmes only at the yatra it is verified for', () => programmes.request(trustAdmin, { ...progForm, eventId: String(otherYatra._id) }), 403);
                 await programmes.decide(prog._id, desk, { decision: 'APPROVED' });
                 const listed = (await programmes.forYatra(event._id)).find((x) => String(x._id) === String(prog._id));
                 check('Approved: shown on the yatra page with the organiser\'s name', listed?.organiserName === kitchenForm.orgName && listed.placesLeft === 2, JSON.stringify(listed));
