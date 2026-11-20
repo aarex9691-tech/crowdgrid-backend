@@ -1071,7 +1071,9 @@ async function main() {
                 if (otherYatra) await expectError('Another yatra needs its own approval', () => kitchens.dashboard(km, otherYatra._id), 403);
 
                 // 4. Programmes for pilgrims, approved by the control room
-                const progForm = { eventId: String(event._id), title: 'Flow Test Bhandara', type: 'BHANDARA', date: day, startTime: '12:00', endTime: '14:00', venue: 'Tapovan langar ground', sector: 'Tapovan', capacity: 2, description: 'A free feast for pilgrims.' };
+                // the next day of the yatra, so the programme has not ended whatever time the tests run
+                const progDay = new Date(Date.parse(`${day}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+                const progForm = { eventId: String(event._id), title: 'Flow Test Bhandara', type: 'BHANDARA', date: progDay, startTime: '12:00', endTime: '14:00', venue: 'Tapovan langar ground', sector: 'Tapovan', capacity: 2, description: 'A free feast for pilgrims.' };
                 await expectError('A programme must fall on a day of the yatra', () => programmes.request(km, { ...progForm, date: '2099-01-01' }), 400);
                 if (otherYatra) await expectError('A kitchen holds programmes only at a yatra it is approved for', () => programmes.request(km, { ...progForm, eventId: String(otherYatra._id) }), 403);
                 const prog = await programmes.request(km, progForm);
